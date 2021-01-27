@@ -29,7 +29,12 @@ lite_cc_library(mir_passes
       fusion/reshape_fuse_pass.cc
       fusion/__xpu__resblock_reduction_fuse_pass.cc
       fusion/__xpu__resblock_normal_fuse_pass.cc
-      fusion/__xpu__resnet_fuse_pass.cc
+      fusion/__xpu__consecutive_conv2d_fuse_pass.cc
+      fusion/__xpu__consecutive_block_fuse_pass.cc
+      fusion/__xpu__conv2d_pool2d_fuse_pass.cc
+      fusion/__xpu__conv2d_concat_pool2d_fuse_pass.cc
+      #fusion/__xpu__resnet_fuse_pass.cc
+      #fusion/__xpu__res2net_fuse_pass.cc
       fusion/__xpu__resnet_cbam_fuse_pass.cc
       fusion/__xpu__multi_encoder_fuse_pass.cc
       fusion/__xpu__embedding_with_eltwise_add_fuse_pass.cc
@@ -37,6 +42,7 @@ lite_cc_library(mir_passes
       fusion/__xpu__mmdnn_fuse_pass.cc
       fusion/__xpu__conv2d_fuse_pass.cc
       fusion/__xpu__conv2d_link_previous_out_max_pass.cc
+      fusion/__xpu__block_link_previous_out_max_pass.cc
       fusion/__xpu__sfa_head_meanstd_fuse_pass.cc
       fusion/__xpu__sfa_head_moment_fuse_pass.cc
       fusion/__xpu__softmax_topk_fuse_pass.cc

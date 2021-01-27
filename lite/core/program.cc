@@ -12,16 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "lite/core/program.h"
+#ifdef LITE_WITH_XPU
+#include <fcntl.h>
+#endif
 #include <algorithm>
 #include <map>
 #include <set>
+#include "lite/core/program.h"
 #include "lite/model_parser/cpp_desc.h"
 #include "lite/operators/conditional_block_op.h"
 #include "lite/operators/subgraph_op.h"
 #include "lite/operators/while_op.h"
 #ifdef LITE_WITH_PRECISION_PROFILE
 #include "lite/core/profile/precision_profiler.h"
+#endif
+
+#ifdef LITE_WITH_XPU
+#include <mutex>
 #endif
 
 namespace paddle {
@@ -258,6 +265,15 @@ RuntimeProgram::RuntimeProgram(
 }
 
 void RuntimeProgram::Run() {
+#ifdef LITE_WITH_XPU
+  // thread mutex
+  static std::mutex _mutex_dev;
+  std::lock_guard<std::mutex> lock(_mutex_dev);
+
+  //// process mutex
+  lite::TargetWrapperXPU::LockL3Cache();
+#endif
+
 #ifdef LITE_WITH_PRECISION_PROFILE
   auto inst_precision_profiler = paddle::lite::profile::PrecisionProfiler();
   std::string precision_profiler_summary =
@@ -309,6 +325,9 @@ void RuntimeProgram::Run() {
   LOG(INFO) << "\n"
             << precision_profiler_summary
             << inst_precision_profiler.GetSummaryTail();
+#endif
+#ifdef LITE_WITH_XPU
+  lite::TargetWrapperXPU::FreeL3Cache();
 #endif
 }
 

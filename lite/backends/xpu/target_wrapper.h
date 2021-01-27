@@ -178,8 +178,8 @@ class TargetWrapper<TARGET(kXPU)> {
       if (l3_ptr != nullptr) {
         XPU_CALL(xpu_free(l3_ptr));
       }
-      xpu_l3_lock_size = -1;
-      xpu_l3_lock_fd = -1;
+      // xpu_l3_lock_size = -1;
+      // xpu_l3_lock_fd = -1;
       struct flock f_lock;
       f_lock.l_whence = 0;
       f_lock.l_len = 0;
