@@ -43,7 +43,8 @@ void ArgmaxCompute::Run() {
                                      x_dims,
                                      axis);
     CHECK_EQ(r, 0);
-  } else {  // else if (param.dtype == 2) {}    xpu not support int32 now
+  } else {
+    // else if (param.dtype == 2) {}    xpu not support int32 now
     LOG(FATAL) << "argmax unsupported param type for xpu: " << param.dtype;
   }
 }

@@ -15,11 +15,15 @@
 #pragma once
 
 #include <fcntl.h>
+#include <pthread.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
 #include <memory>                                 // std::unique_ptr
 #include "lite/backends/xpu/xpu_header_sitter.h"  // xpu_free
 #include "lite/core/target_wrapper.h"             // TargetWrapper
 #include "lite/utils/cp_logging.h"                // CHECK_EQ
 #include "lite/utils/macros.h"
+#define gettidv1() syscall(__NR_gettid)
 
 #define XPU_CALL(func)                                        \
   {                                                           \
@@ -75,36 +79,21 @@ class TargetWrapper<TARGET(kXPU)> {
     if (tls_raw_ctx_ == nullptr) {
       tls_raw_ctx_ = xdnn::create_context();
       CHECK(tls_raw_ctx_);
-      if (workspace_l3_size_per_thread) {
-        void* xpu_l3_ptr = nullptr;
-        XPU_CALL(xpu_malloc(reinterpret_cast<void**>(&xpu_l3_ptr),
-                            workspace_l3_size_per_thread,
-                            XPU_MEM_L3));
-        if (xpu_l3_ptr != nullptr) {
-          tls_raw_ctx_->_l3_mgr.set(xpu_l3_ptr, workspace_l3_size_per_thread);
-          LOG(INFO) << "XPU L3 malloc: " << workspace_l3_size_per_thread;
-        } else {
-          LOG(WARNING) << "XPU L3 Cache Malloc Fail, Set L3 WorkSpace as 0";
-        }
-      }
-
-      if (set_xpu_auto_tune) {
+      if (conv_autotune) {
         tls_raw_ctx_->_xpu1_conv_selector.set_autotune_loop(true);
         tls_raw_ctx_->_xpu1_conv_selector.set_inference_mode(true);
-        const char* autotune_file = std::getenv("XPU_AUTOTUNE_FILE");
-        if (autotune_file) {
-          tls_raw_ctx_->_xpu1_conv_selector.set_autotune_file(autotune_file);
-        }
       }
-
-      // int r = xdnn::set_workspace_l3_size(tls_raw_ctx_,
-      //                                    workspace_l3_size_per_thread);
-
-      // if (r != 0) {
-      //  LOG(WARNING) << "xdnn::set_workspace_l3_size() failed, r = " << r
-      //               << ", workspace_l3_size_per_thread = "
-      //               << workspace_l3_size_per_thread;
-      //}
+      if (!conv_autotune_file.empty()) {
+        tls_raw_ctx_->_xpu1_conv_selector.set_autotune_file(
+            conv_autotune_file.c_str());
+      }
+      int r = xdnn::set_workspace_l3_size(tls_raw_ctx_,
+                                          workspace_l3_size_per_thread);
+      if (r != 0) {
+        LOG(WARNING) << "xdnn::set_workspace_l3_size() failed, r = " << r
+                     << ", workspace_l3_size_per_thread = "
+                     << workspace_l3_size_per_thread;
+      }
     }
     return tls_raw_ctx_;
   }
@@ -128,6 +117,7 @@ class TargetWrapper<TARGET(kXPU)> {
     f_lock.l_whence = 0;
     f_lock.l_len = 0;
 
+    VLOG(5) << pthread_self() << ", gettid: " << gettidv1() << " LockL3Cache";
     if (xpu_l3_lock_size_str && (std::atoi(xpu_l3_lock_size_str) > 0)) {
       int pd = -1;
       XPU_CALL(xpu_current_device(&pd));
@@ -143,17 +133,8 @@ class TargetWrapper<TARGET(kXPU)> {
       fcntl(xpu_l3_lock_fd, F_SETLKW, &f_lock);
       // check ctx and init
       if (tls_raw_ctx_ == nullptr) {
-        tls_raw_ctx_ = xdnn::create_context();
+        GetRawContext();
         CHECK(tls_raw_ctx_);
-
-        if (set_xpu_auto_tune) {
-          tls_raw_ctx_->_xpu1_conv_selector.set_autotune_loop(true);
-          tls_raw_ctx_->_xpu1_conv_selector.set_inference_mode(true);
-          const char* autotune_file = std::getenv("XPU_AUTOTUNE_FILE");
-          if (autotune_file) {
-            tls_raw_ctx_->_xpu1_conv_selector.set_autotune_file(autotune_file);
-          }
-        }
       }
       // set l3 cache
       void* xpu_l3_ptr = nullptr;
@@ -177,9 +158,8 @@ class TargetWrapper<TARGET(kXPU)> {
       void* l3_ptr = tls_raw_ctx_->_l3_mgr.get_ptr();
       if (l3_ptr != nullptr) {
         XPU_CALL(xpu_free(l3_ptr));
+        VLOG(5) << "getpid: " << gettidv1() << "FreeL3Cache";
       }
-      // xpu_l3_lock_size = -1;
-      // xpu_l3_lock_fd = -1;
       struct flock f_lock;
       f_lock.l_whence = 0;
       f_lock.l_len = 0;
@@ -191,7 +171,8 @@ class TargetWrapper<TARGET(kXPU)> {
 
   static std::string multi_encoder_precision;  // NOLINT
   static int workspace_l3_size_per_thread;
-  static bool set_xpu_auto_tune;
+  static bool conv_autotune;
+  static std::string conv_autotune_file;  // NOLINT
 
  private:
   static LITE_THREAD_LOCAL xdnn::Context* tls_raw_ctx_;

@@ -127,7 +127,9 @@ enum class ActivationType : int {
   kElu = 13,
   kHardSigmoid = 14,
   kLog = 15,
-  NUM = 16,
+  kSigmoid_v2 = 16,
+  kTanh_v2 = 17,
+  NUM = 18,
 };
 
 static size_t PrecisionTypeLength(PrecisionType type) {
@@ -205,6 +207,10 @@ const std::string& TargetRepr(TargetType target);
 const std::string& PrecisionRepr(PrecisionType precision);
 
 const std::string& DataLayoutRepr(DataLayoutType layout);
+
+const std::string& CLTuneModeToStr(CLTuneMode mode);
+
+const std::string& CLPrecisionTypeToStr(CLPrecisionType type);
 
 // Get a set of all the elements represented by the target.
 std::set<TargetType> ExpandValidTargets(TargetType target = TARGET(kAny));

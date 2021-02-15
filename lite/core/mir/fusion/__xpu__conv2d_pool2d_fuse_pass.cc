@@ -23,28 +23,37 @@ namespace lite {
 namespace mir {
 namespace fusion {
 
+/* fuse xpu_conv2d and pool2d                        */
+/*                                                   */
+/*                   in_Input                        */
+/*        in_Filter      |     in_FilterMax          */
+/*                  \    |    /                      */
+/*                   \   |   /                       */
+/*     in_Bias ------- __xpu__conv2d                 */
+/*                       |    \                      */
+/*                       |     \                     */
+/*                       |      out_OutputMax        */
+/*                     pool2d                        */
+/*                       |                           */
+/*                       |                           */
+/*                   pool2d_out                      */
+/*                                                   */
+/*-------------------------------------------------- */
+/*                                                   */
+/* After the pass is applied:                        */
+/*                     in_Input                      */
+/*        in_Filter      |     in_FilterMax          */
+/*                  \    |    /                      */
+/*                   \   |   /                       */
+/*     in_Bias ------- __xpu__block_fuse             */
+/*                       |    \                      */
+/*                       |     \                     */
+/*                       |      out_OutputMax        */
+/*                 out_Output                        */
+/*                                                   */
+
 class XPUConv2dPool2dFuser : public FuseBase {
  public:
-  static bool Pool2dCheck(const Node* x) {
-    if (x && x->IsStmt()) {
-      auto* op_info = x->stmt()->op_info();
-      if (op_info->HasAttr("adaptive")) {
-        auto attr_type = op_info->GetAttrType("adaptive");
-        if (attr_type == paddle::lite::OpDescAPI::AttrType::BOOLEAN &&
-            op_info->GetAttr<bool>("adaptive") == true) {
-          return false;
-        }
-      }
-      if (op_info->HasAttr("padding_algorithm") &&
-          op_info->GetAttrType("padding_algorithm") ==
-              paddle::lite::OpDescAPI::AttrType::STRING &&
-          op_info->GetAttr<std::string>("padding_algorithm") == "SAME") {
-        return false;
-      }
-    }
-    return true;
-  }
-
   void BuildPattern() override {
     auto* input = VarNode("input")
                       ->assert_is_op_input("__xpu__conv2d", "Input")
@@ -63,8 +72,7 @@ class XPUConv2dPool2dFuser : public FuseBase {
                      ->AsInput();
     auto* xpu_conv =
         OpNode("xpu_conv", "__xpu__conv2d")
-            ->assert_op_attr_satisfied<bool>(
-                "has_branch", [](const bool& attr) { return attr == false; })
+            ->assert_op_attr<bool>("has_branch", false)
             ->assert_op_attr_satisfied<int>(
                 "act_type",
                 [](const int& attr) {
@@ -78,13 +86,25 @@ class XPUConv2dPool2dFuser : public FuseBase {
     auto* conv_out_max = VarNode("conv_out_max")
                              ->assert_is_op_output("__xpu__conv2d", "OutputMax")
                              ->AsIntermediate();
-    auto* pool2d =
-        OpNode("pool2d", "pool2d")
-            ->assert_op_attr_satisfied<bool>(
-                "global_pooling",
-                [](const bool& attr) { return attr == false; })
-            ->assert_node_satisfied(XPUConv2dPool2dFuser::Pool2dCheck)
-            ->AsIntermediate();
+
+    auto pool2d_teller = [](const Node* x) -> bool {
+      if (x && x->IsStmt()) {
+        auto* op_info = x->stmt()->op_info();
+        if (op_info->HasAttr("adaptive") &&
+            op_info->GetAttr<bool>("adaptive")) {
+          return false;
+        }
+        if (op_info->HasAttr("padding_algorithm") &&
+            op_info->GetAttr<std::string>("padding_algorithm") == "SAME") {
+          return false;
+        }
+      }
+      return true;
+    };
+    auto* pool2d = OpNode("pool2d", "pool2d")
+                       ->assert_op_attr<bool>("global_pooling", false)
+                       ->assert_node_satisfied(pool2d_teller)
+                       ->AsIntermediate();
     auto* pool2d_out =
         VarNode("pool2d_out")->assert_is_op_output("pool2d", "Out")->AsOutput();
 
@@ -101,7 +121,7 @@ class XPUConv2dPool2dFuser : public FuseBase {
     std::vector<std::string> filter_max_name{
         matched.at("weight_max")->arg()->name};
 
-    auto op_desc = *matched.at("xpu_conv")->stmt()->op_info();
+    cpp::OpDesc op_desc;
     auto conv = matched.at("xpu_conv")->stmt()->op();
     auto* scope = conv->scope();
     op_desc.mutable_inputs()->clear();
@@ -120,14 +140,10 @@ class XPUConv2dPool2dFuser : public FuseBase {
     op_desc.SetOutput("Output", {output_name});
     op_desc.SetOutput("OutputMax", {max_output_name});
 
-    static const int PX = 0;
-    static const int P1 = 1;
-    static const int PNONE = 9;
-    static const int PY = 10;
-    std::vector<int> place_x{PX, P1};
-    std::vector<int> place_y{PNONE, PNONE};
-    std::vector<int> place_z{P1, PY};
-    std::vector<int> block_lod{2};
+    std::vector<int> place_x{0, 0};
+    std::vector<int> place_y{9, 9};
+    std::vector<int> place_z{10, 10};
+    std::vector<int> block_lod{1, 1};
     int pooling_type = -1;
     if (matched.at("pool2d")->stmt()->op_info()->GetAttr<std::string>(
             "pooling_type") == "avg") {
@@ -141,7 +157,6 @@ class XPUConv2dPool2dFuser : public FuseBase {
       pooling_type = 3;
     }
     std::vector<int> op_type{0, pooling_type};
-
     auto conv_filter_dims = matched.at("xpu_conv")
                                 ->stmt()
                                 ->op_info()
@@ -173,12 +188,10 @@ class XPUConv2dPool2dFuser : public FuseBase {
         int copy_pad = *(conv_paddings.begin() + 2 * i);
         conv_paddings.insert(conv_paddings.begin() + 2 * i + 1, copy_pad);
       }
-    } else {
-      if (conv_paddings.size() != 4) {
-        LOG(FATAL)
-            << "Paddings size should be the same or twice as the input size.";
-      }
     }
+    CHECK_EQ(conv_paddings.size(), 4UL)
+        << "Paddings size should be 2 or 4, But received paddings size: "
+        << conv_paddings.size();
     auto pool_paddings =
         matched.at("pool2d")->stmt()->op_info()->GetAttr<std::vector<int>>(
             "paddings");
@@ -187,12 +200,10 @@ class XPUConv2dPool2dFuser : public FuseBase {
         int copy_pad = *(pool_paddings.begin() + 2 * i);
         pool_paddings.insert(pool_paddings.begin() + 2 * i + 1, copy_pad);
       }
-    } else {
-      if (pool_paddings.size() != 4) {
-        LOG(FATAL)
-            << "Paddings size should be the same or twice as the input size.";
-      }
     }
+    CHECK_EQ(conv_paddings.size(), 4UL)
+        << "Paddings size should be 2 or 4, But received paddings size: "
+        << conv_paddings.size();
     if ((matched.at("pool2d")->stmt()->op_info()->HasAttr(
             "padding_algorithm")) &&
         (matched.at("pool2d")->stmt()->op_info()->GetAttr<std::string>(

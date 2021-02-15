@@ -22,6 +22,98 @@ namespace paddle {
 namespace lite {
 namespace mir {
 namespace fusion {
+/* fuse xpu_conv2d pool2d and concat as xpu_block  */
+/* graph[1]: has_mid_conv = false                  */
+/*           has_pool2d = false                    */
+/*                                                 */
+/*                in_Input                         */
+/*                /      \                         */
+/*              /          \                       */
+/*             |            |                      */
+/*             |            |                      */
+/*         xpu_conv2d   xpu_conv2d                 */
+/*             |            |                      */
+/*              \          /                       */
+/*                \       /                        */
+/*                  concat                         */
+/*                    |                            */
+/*                    |                            */
+/*                out_Output                       */
+/*-------------------------------------------------*/
+/* graph[2]: has_mid_conv = true                   */
+/*           has_pool2d = false                    */
+/*                                                 */
+/*                in_Input                         */
+/*                /      \                         */
+/*              /          \                       */
+/*             |            |                      */
+/*             |        xpu_conv2d                 */
+/*             |            |                      */
+/*             |            |                      */
+/*         xpu_conv2d   xpu_conv2d                 */
+/*             |            |                      */
+/*              \          /                       */
+/*                \       /                        */
+/*                  concat                         */
+/*                    |                            */
+/*                    |                            */
+/*                out_Output                       */
+/*-------------------------------------------------*/
+/* graph[3]: has_mid_conv = false                  */
+/*           has_pool2d = true                     */
+/*                                                 */
+/*                in_Input                         */
+/*                /      \                         */
+/*              /          \                       */
+/*             |            |                      */
+/*             |            |                      */
+/*         xpu_conv2d   xpu_conv2d                 */
+/*             |            |                      */
+/*             |            |                      */
+/*              \          /                       */
+/*                \       /                        */
+/*                 concat                          */
+/*                    |                            */
+/*                    |                            */
+/*                  pool2d                         */
+/*                    |                            */
+/*                    |                            */
+/*                out_Output                       */
+/*-------------------------------------------------*/
+/* graph[4]: has_mid_conv = ture                   */
+/*           has_pool2d = true                     */
+/*                                                 */
+/*                in_Input                         */
+/*                /      \                         */
+/*              /          \                       */
+/*             |            |                      */
+/*             |        xpu_conv2d                 */
+/*             |            |                      */
+/*             |            |                      */
+/*         xpu_conv2d   xpu_conv2d                 */
+/*             |            |                      */
+/*              \          /                       */
+/*                \       /                        */
+/*                  concat                         */
+/*                    |                            */
+/*                    |                            */
+/*                  pool2d                         */
+/*                    |                            */
+/*                    |                            */
+/*                out_Output                       */
+/*                                                 */
+/*-------------------------------------------------*/
+/* After the pass is applied:                      */
+/*                     in_Input                    */
+/*        in_Filter      |     in_FilterMax        */
+/*                  \    |    /                    */
+/*                   \   |   /                     */
+/*     in_Bias ------- __xpu__block_fuse           */
+/*                       |    \                    */
+/*                       |     \                   */
+/*                       |      out_OutputMax      */
+/*                 out_Output                      */
+/*                                                 */
 
 class XPUConv2dConcatPool2dFuser : public FuseBase {
  public:
@@ -29,26 +121,6 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
     has_mid_conv_ = has_mid_conv;
     has_pool2d_ = has_pool2d;
   }
-  static bool Pool2dCheck(const Node* x) {
-    if (x && x->IsStmt()) {
-      auto* op_info = x->stmt()->op_info();
-      if (op_info->HasAttr("adaptive")) {
-        auto attr_type = op_info->GetAttrType("adaptive");
-        if (attr_type == paddle::lite::OpDescAPI::AttrType::BOOLEAN &&
-            op_info->GetAttr<bool>("adaptive") == true) {
-          return false;
-        }
-      }
-      if (op_info->HasAttr("padding_algorithm") &&
-          op_info->GetAttrType("padding_algorithm") ==
-              paddle::lite::OpDescAPI::AttrType::STRING &&
-          op_info->GetAttr<std::string>("padding_algorithm") == "SAME") {
-        return false;
-      }
-    }
-    return true;
-  }
-
   void BuildPattern() override {
     auto* input = VarNode("input")
                       ->assert_is_op_input("__xpu__conv2d", "Input")
@@ -68,8 +140,7 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
                            ->AsInput();
     auto* left_xpu_conv0 =
         OpNode("left_xpu_conv0", "__xpu__conv2d")
-            ->assert_op_attr_satisfied<bool>(
-                "has_branch", [](const bool& attr) { return attr == false; })
+            ->assert_op_attr<bool>("has_branch", false)
             ->assert_op_attr_satisfied<int>(
                 "act_type",
                 [](const int& attr) {
@@ -105,8 +176,7 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
                         ->AsInput();
       right_xpu_conv0 =
           OpNode("right_xpu_conv0", "__xpu__conv2d")
-              ->assert_op_attr_satisfied<bool>(
-                  "has_branch", [](const bool& attr) { return attr == false; })
+              ->assert_op_attr<bool>("has_branch", false)
               ->assert_op_attr_satisfied<int>(
                   "act_type",
                   [](const int& attr) {
@@ -138,8 +208,7 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
                             ->AsInput();
     auto* right_xpu_conv1 =
         OpNode("right_xpu_conv1", "__xpu__conv2d")
-            ->assert_op_attr_satisfied<bool>(
-                "has_branch", [](const bool& attr) { return attr == false; })
+            ->assert_op_attr<bool>("has_branch", false)
             ->assert_op_attr_satisfied<int>(
                 "act_type",
                 [](const int& attr) {
@@ -155,11 +224,7 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
             ->assert_is_op_output("__xpu__conv2d", "OutputMax")
             ->AsIntermediate();
     auto* concat = OpNode("concat", "concat")
-                       ->assert_op_attr_satisfied<int>(
-                           "axis",
-                           [](const int& attr) {
-                             return attr == 1; /* support relu and sigmoid */
-                           })
+                       ->assert_op_attr<int>("axis", 1)
                        ->AsIntermediate();
     auto* concat_out =
         VarNode("concat_out")->assert_is_op_output("concat", "Out");
@@ -167,20 +232,30 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
     PMNode* pool2d_out = nullptr;
     if (has_pool2d_) {
       concat_out->assert_is_op_input("pool2d", "X")->AsIntermediate();
-      pool2d =
-          OpNode("pool2d", "pool2d")
-              ->assert_op_attr_satisfied<bool>(
-                  "global_pooling",
-                  [](const bool& attr) { return attr == false; })
-              ->assert_node_satisfied(XPUConv2dConcatPool2dFuser::Pool2dCheck)
-              ->AsIntermediate();
+      auto pool2d_teller = [](const Node* x) -> bool {
+        if (x && x->IsStmt()) {
+          auto* op_info = x->stmt()->op_info();
+          if (op_info->HasAttr("adaptive") &&
+              op_info->GetAttr<bool>("adaptive")) {
+            return false;
+          }
+          if (op_info->HasAttr("padding_algorithm") &&
+              op_info->GetAttr<std::string>("padding_algorithm") == "SAME") {
+            return false;
+          }
+        }
+        return true;
+      };
+      pool2d = OpNode("pool2d", "pool2d")
+                   ->assert_op_attr<bool>("global_pooling", false)
+                   ->assert_node_satisfied(pool2d_teller)
+                   ->AsIntermediate();
       pool2d_out = VarNode("pool2d_out")
                        ->assert_is_op_output("pool2d", "Out")
                        ->AsOutput();
     } else {
       concat_out->AsOutput();
     }
-
     *input >> *left_xpu_conv0 >> *left_conv_out0 >> *concat;
     if (has_mid_conv_) {
       *input >> *right_xpu_conv0 >> *right_conv_out0 >> *right_xpu_conv1 >>
@@ -232,12 +307,11 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
     } else {
       output_name = matched.at("concat_out")->arg()->name;
     }
-    auto op_desc = *matched.at("left_xpu_conv0")->stmt()->op_info();
+    cpp::OpDesc op_desc;
     auto conv = matched.at("left_xpu_conv0")->stmt()->op();
     auto* scope = conv->scope();
     op_desc.mutable_inputs()->clear();
     op_desc.mutable_outputs()->clear();
-
     // add new arg output_max
     std::string max_output_name = output_name + "_max";
     auto* max_output_node = graph->NewArgumentNode(max_output_name);
@@ -252,34 +326,27 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
     op_desc.SetInput("FilterMax", {filter_max_name});
     op_desc.SetOutput("Output", {output_name});
     op_desc.SetOutput("OutputMax", {max_output_name});
-    static const int PX = 0;
-    static const int P1 = 1;
-    static const int P2 = 2;
-    static const int P3 = 3;
-    static const int P4 = 4;
-    static const int PNONE = 9;
-    static const int PY = 10;
     std::vector<int> place_x;
     std::vector<int> place_y;
     std::vector<int> place_z;
     std::vector<int> block_lod;
     std::vector<int> op_type;
     if (has_mid_conv_) {
-      place_x = {PX, PX, P2, P1};
-      place_y = {PNONE, PNONE, PNONE, P3};
-      place_z = {P2, P1, P3, P4};
+      place_x = {0, 0, 2, 1};
+      place_y = {9, 9, 9, 3};
+      place_z = {2, 1, 3, 4};
       op_type = {0, 0, 0, 20};
     } else {
-      place_x = {PX, PX, P1};
-      place_y = {PNONE, PNONE, P2};
-      place_z = {P1, P2, P3};
+      place_x = {0, 0, 1};
+      place_y = {9, 9, 2};
+      place_z = {1, 2, 3};
       op_type = {0, 0, 20};
     }
     if (has_pool2d_) {
       auto last_place = place_z.back();
       place_x.push_back(last_place);
-      place_y.push_back(PNONE);
-      place_z.push_back(PY);
+      place_y.push_back(9);
+      place_z.push_back(10);
       int pooling_type = -1;
       if (matched.at("pool2d")->stmt()->op_info()->GetAttr<std::string>(
               "pooling_type") == "avg") {
@@ -294,7 +361,7 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
       }
       op_type.push_back(pooling_type);
     } else {
-      place_z[place_z.size() - 1] = PY;
+      place_z[place_z.size() - 1] = 10;
     }
     if (has_mid_conv_ && has_pool2d_) {
       block_lod = {5};
@@ -311,11 +378,9 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
     std::vector<int> conv_groups;
     std::vector<int> act_type;
     std::vector<float> act_param;
-
     std::vector<int> encode_filter_size{0};
     std::vector<int> encode_bias_size{0};
     std::vector<int> encode_filter_max_size{0};
-
     for (auto name : conv_name) {
       auto cur_filter_dims =
           matched.at(name)->stmt()->op_info()->GetAttr<std::vector<int>>(
@@ -349,12 +414,10 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
           int copy_pad = *(cur_paddings.begin() + 2 * i);
           cur_paddings.insert(cur_paddings.begin() + 2 * i + 1, copy_pad);
         }
-      } else {
-        if (cur_paddings.size() != 4) {
-          LOG(FATAL)
-              << "Paddings size should be the same or twice as the input size.";
-        }
       }
+      CHECK_EQ(cur_paddings.size(), 4UL)
+          << "Paddings size should be 2 or 4, But received paddings size: "
+          << cur_paddings.size();
       conv_paddings.insert(
           conv_paddings.end(), cur_paddings.begin(), cur_paddings.end());
       conv_dilations.insert(
@@ -450,12 +513,10 @@ class XPUConv2dConcatPool2dFuser : public FuseBase {
           int copy_pad = *(pool_paddings.begin() + 2 * i);
           pool_paddings.insert(pool_paddings.begin() + 2 * i + 1, copy_pad);
         }
-      } else {
-        if (pool_paddings.size() != 4) {
-          LOG(FATAL)
-              << "Paddings size should be the same or twice as the input size.";
-        }
       }
+      CHECK_EQ(pool_paddings.size(), 4UL)
+          << "Paddings size should be 2 or 4, But received paddings size: "
+          << pool_paddings.size();
       if ((matched.at("pool2d")->stmt()->op_info()->HasAttr(
               "padding_algorithm")) &&
           (matched.at("pool2d")->stmt()->op_info()->GetAttr<std::string>(

@@ -14,7 +14,6 @@
 
 #include "lite/api/paddle_api.h"
 
-#include <functional>
 #include <utility>
 
 #include "lite/core/context.h"
@@ -26,6 +25,7 @@
 #include "lite/backends/cuda/target_wrapper.h"
 #endif
 #ifdef LITE_WITH_XPU
+#include <functional>
 #include "lite/backends/xpu/target_wrapper.h"
 #endif
 
@@ -41,6 +41,9 @@ namespace paddle {
 namespace lite_api {
 
 bool IsOpenCLBackendValid(bool check_fp16_valid) {
+#ifdef LITE_WITH_LOG
+  LOG(INFO) << "check_fp16_valid:" << check_fp16_valid;
+#endif
   bool opencl_valid = false;
 
 #ifdef LITE_WITH_OPENCL
@@ -266,15 +269,31 @@ ConfigBase::ConfigBase(PowerMode mode, int threads) {
 #endif
 }
 
-void ConfigBase::set_opencl_tune(CLTuneMode tune_mode) {
+void ConfigBase::set_opencl_binary_path_name(const std::string &path,
+                                             const std::string &name) {
+#ifdef LITE_WITH_OPENCL
+  if (paddle::lite_api::IsOpenCLBackendValid()) {
+    opencl_bin_path_ = path;
+    opencl_bin_name_ = name;
+    lite::CLRuntime::Global()->SetBinaryPathName(path, name);
+#ifdef LITE_WITH_LOG
+    LOG(INFO) << "opencl binary path and file name:"
+              << (lite::CLRuntime::Global()->GetBinaryPathName())[0] << "/"
+              << (lite::CLRuntime::Global()->GetBinaryPathName())[1];
+#endif
+  }
+#endif
+}
+
+void ConfigBase::set_opencl_tune(CLTuneMode tune_mode, size_t lws_repeats) {
 #ifdef LITE_WITH_OPENCL
   if (paddle::lite_api::IsOpenCLBackendValid()) {
     opencl_tune_mode_ = tune_mode;
-    paddle::lite::CLRuntime::Global()->set_auto_tune(opencl_tune_mode_);
+    paddle::lite::CLRuntime::Global()->set_auto_tune(opencl_tune_mode_,
+                                                     lws_repeats);
 #ifdef LITE_WITH_LOG
-    LOG(INFO) << "opencl_tune_mode:"
-              << static_cast<size_t>(
-                     paddle::lite::CLRuntime::Global()->auto_tune());
+    LOG(INFO) << "set opencl_tune_mode: "
+              << CLTuneModeToStr(lite::CLRuntime::Global()->auto_tune());
 #endif
   }
 #endif
@@ -286,9 +305,9 @@ void ConfigBase::set_opencl_precision(CLPrecisionType p) {
     opencl_precision_ = p;
     paddle::lite::CLRuntime::Global()->set_precision(p);
 #ifdef LITE_WITH_LOG
-    LOG(INFO) << "get opencl precision:"
-              << static_cast<size_t>(
-                     paddle::lite::CLRuntime::Global()->get_precision());
+    LOG(INFO) << "set opencl precision: "
+              << CLPrecisionTypeToStr(
+                     lite::CLRuntime::Global()->get_precision());
 #endif
   }
 #endif
@@ -317,6 +336,18 @@ void ConfigBase::set_x86_math_num_threads(int threads) {
 int ConfigBase::x86_math_num_threads() const { return x86_math_num_threads_; }
 #endif
 
+void ConfigBase::set_subgraph_model_cache_buffers(
+    const std::string &key,
+    const std::vector<char> &cfg,
+    const std::vector<char> &bin) {
+  CHECK(!key.empty());
+  CHECK(!cfg.empty());
+  CHECK(!bin.empty());
+  CHECK_EQ(subgraph_model_cache_buffers_.count(key), 0);
+  subgraph_model_cache_buffers_[key] =
+      std::pair<std::vector<char>, std::vector<char>>(cfg, bin);
+}
+
 CxxModelBuffer::CxxModelBuffer(const char *program_buffer,
                                size_t program_buffer_size,
                                const char *params_buffer,
@@ -336,15 +367,9 @@ const std::string &CxxModelBuffer::get_program() const {
   return program_;
 }
 
-const std::string &CxxModelBuffer::get_params() const {
-  CHECK(!params_.empty());
-  return params_;
-}
+const std::string &CxxModelBuffer::get_params() const { return params_; }
 
-bool CxxModelBuffer::is_empty() const {
-  CHECK(program_.empty() == params_.empty());
-  return program_.empty();
-}
+bool CxxModelBuffer::is_empty() const { return program_.empty(); }
 
 const CxxModelBuffer &CxxConfig::get_model_buffer() const {
   CHECK(model_buffer_) << "Cannot get an empty model buffer.";
@@ -406,9 +431,11 @@ void CxxConfig::set_xpu_multi_encoder_precision(const std::string &precision) {
 #endif
 }
 
-void CxxConfig::set_xpu_conv_autotune(bool autotune) {
+void CxxConfig::set_xpu_conv_autotune(bool autotune,
+                                      const std::string &autotune_file) {
 #ifdef LITE_WITH_XPU
-  lite::TargetWrapperXPU::set_xpu_auto_tune = autotune;
+  lite::TargetWrapperXPU::conv_autotune = autotune;
+  lite::TargetWrapperXPU::conv_autotune_file = autotune_file;
 #else
   LOG(WARNING) << "The invoking of the function "
                   "'set_xpu_conv_autotune' is ignored, please "
@@ -422,6 +449,7 @@ void CxxConfig::set_preferred_inputs_for_warmup(const int group_idx,
                                                 const lod_t &lod,
                                                 const T fill_value,
                                                 const void *data) {
+#ifdef LITE_WITH_XPU
   if (preferred_inputs_for_warmup_.count(group_idx) == 0) {
     preferred_inputs_for_warmup_[group_idx] =
         std::vector<std::shared_ptr<void>>{};
@@ -448,6 +476,11 @@ void CxxConfig::set_preferred_inputs_for_warmup(const int group_idx,
       input_data[i] = fill_value;
     }
   }
+#else
+  LOG(WARNING)
+      << "'set_preferred_inputs_for_warmup' is only for xpu now, please "
+         "rebuild it with LITE_WITH_XPU=ON.";
+#endif
 }
 
 #define _SetPreferredInputsForWarmup(dtype)                        \

@@ -22,6 +22,58 @@ namespace paddle {
 namespace lite {
 namespace mir {
 namespace fusion {
+/* fuse xpu_conv2d and xpu_block as xpu_block*/
+/* graph[1]: block0_type = xpu_conv2d        */
+/*           block1_type = xpu_block         */
+/*                in_Input                   */
+/*                    |                      */
+/*                    |                      */
+/*                __xpu__conv2d              */
+/*                    |                      */
+/*                    |                      */
+/*                __xpu__block               */
+/*                    |                      */
+/*                    |                      */
+/*                out_Output                 */
+/*-------------------------------------------*/
+/* graph[2]: block0_type = xpu_block         */
+/*           block1_type = xpu_conv2d        */
+/*                in_Input                   */
+/*                    |                      */
+/*                    |                      */
+/*                __xpu__block               */
+/*                    |                      */
+/*                    |                      */
+/*                __xpu__conv2d              */
+/*                    |                      */
+/*                    |                      */
+/*                out_Output                 */
+/*-------------------------------------------*/
+/* graph[3]: block0_type = xpu_block         */
+/*           block1_type = xpu_block         */
+/*                in_Input                   */
+/*                    |                      */
+/*                    |                      */
+/*                __xpu__block               */
+/*                    |                      */
+/*                    |                      */
+/*                __xpu__block               */
+/*                    |                      */
+/*                    |                      */
+/*                out_Output                 */
+/*-------------------------------------------*/
+/* After the pass is applied:                */
+/*                  in_Input                 */
+/*     in_Filter      |     in_FilterMax     */
+/*               \    |    /                 */
+/*                \   |   /                  */
+/*  in_Bias ------- __xpu__block_fuse        */
+/*                    |    \                 */
+/*                    |     \                */
+/*                    |      out_OutputMax   */
+/*              out_Output                   */
+/*                                           */
+
 class XPUConsecutiveBlockFuser : public FuseBase {
  public:
   explicit XPUConsecutiveBlockFuser(const std::string& block0_type,
@@ -66,11 +118,9 @@ class XPUConsecutiveBlockFuser : public FuseBase {
                                ->AsOutput();
 
     if (block0_type_ == "__xpu__conv2d") {
-      block0->assert_op_attr_satisfied<bool>(
-          "has_branch", [](const bool& attr) { return attr == false; });
+      block0->assert_op_attr<bool>("has_branch", false);
     } else if (block1_type_ == "__xpu__conv2d") {
-      block1->assert_op_attr_satisfied<bool>(
-          "has_branch", [](const bool& attr) { return attr == false; });
+      block1->assert_op_attr<bool>("has_branch", false);
     }
     *input >> *block0 >> *block_out0 >> *block1 >> *block_out1;
     *filter0 >> *block0;
@@ -93,11 +143,9 @@ class XPUConsecutiveBlockFuser : public FuseBase {
         matched.at("filter_max0")->arg()->name,
         matched.at("filter_max1")->arg()->name};
 
-    auto op_desc = *matched.at("block0")->stmt()->op_info();
+    cpp::OpDesc op_desc;
     auto block_0 = matched.at("block0")->stmt()->op();
     auto* scope = block_0->scope();
-    op_desc.mutable_inputs()->clear();
-    op_desc.mutable_outputs()->clear();
     op_desc.SetType("__xpu__block_fuse_op");
     op_desc.SetInput("Input", {matched.at("input")->arg()->name});
     op_desc.SetOutput("Output", {matched.at("block_out1")->arg()->name});

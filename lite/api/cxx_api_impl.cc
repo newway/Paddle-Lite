@@ -109,6 +109,15 @@ void CxxPaddleApiImpl::Init(const lite_api::CxxConfig &config) {
       raw_predictor_->scope(), config.subgraph_model_cache_dir());
 #endif
 
+#ifdef LITE_WITH_RKNPU
+  // Store the model-level configuration into scope for kernels, and use
+  // exe_scope to store the execution-level configuration
+  Context<TargetType::kRKNPU>::SetSubgraphModelCacheDir(
+      raw_predictor_->scope(), config.subgraph_model_cache_dir());
+  Context<TargetType::kRKNPU>::SetSubgraphModelCacheBuffers(
+      raw_predictor_->scope(), config.subgraph_model_cache_buffers());
+#endif
+
 #ifdef LITE_WITH_HUAWEI_ASCEND_NPU
   Context<TargetType::kHuaweiAscendNPU>::SetHuaweiAscendDeviceID(
       config.get_device_id());
@@ -132,6 +141,7 @@ void CxxPaddleApiImpl::Init(const lite_api::CxxConfig &config) {
           << real_num_threads;
 #endif
 
+#ifdef LITE_WITH_XPU
   auto preferred_inputs = config.preferred_inputs_for_warmup();
   for (auto &preferred_input : preferred_inputs) {
     auto &input_tensors = preferred_input.second;
@@ -176,6 +186,7 @@ void CxxPaddleApiImpl::Init(const lite_api::CxxConfig &config) {
     }
     Run();
   }
+#endif
 }
 
 std::unique_ptr<lite_api::Tensor> CxxPaddleApiImpl::GetInput(int i) {
