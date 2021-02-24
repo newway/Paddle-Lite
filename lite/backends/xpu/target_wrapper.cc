@@ -82,6 +82,7 @@ int TargetWrapperXPU::xpu_l3_lock_fd{-1};
 bool TargetWrapperXPU::conv_autotune{false};
 std::string TargetWrapperXPU::conv_autotune_file;  // NOLINT
 LITE_THREAD_LOCAL xdnn::Context* TargetWrapperXPU::tls_raw_ctx_{nullptr};
+pthread_mutex_t* TargetWrapperXPU::xpu_dev_mutex_[MAX_XPU_DEV_NUM] = {nullptr};
 
 }  // namespace lite
 }  // namespace paddle

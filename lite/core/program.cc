@@ -263,12 +263,7 @@ RuntimeProgram::RuntimeProgram(
 
 void RuntimeProgram::Run() {
 #ifdef LITE_WITH_XPU
-  // thread mutex
-  static std::mutex _mutex_dev;
-  std::lock_guard<std::mutex> lock(_mutex_dev);
-
-  //// process mutex
-  lite::TargetWrapperXPU::LockL3Cache();
+  lite::TargetWrapperXPU::LockXPU();
 #endif
 
 #ifdef LITE_WITH_PRECISION_PROFILE
@@ -327,7 +322,7 @@ void RuntimeProgram::Run() {
             << inst_precision_profiler.GetSummaryTail();
 #endif
 #ifdef LITE_WITH_XPU
-  lite::TargetWrapperXPU::FreeL3Cache();
+  lite::TargetWrapperXPU::UnLockXPU();
 #endif
 }
 
