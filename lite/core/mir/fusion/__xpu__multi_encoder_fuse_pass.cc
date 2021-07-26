@@ -571,16 +571,22 @@ class XPUMultiEncoderFuser {
     }
     return false;
   }
-
   void operator()(SSAGraph* graph) {
     std::vector<Node*> all_encoders;
     for (auto* node : graph->StmtTopologicalOrder()) {
       CHECK(node->IsStmt());
       if (node->stmt()->op_info()->Type() == "single_encoder") {
-        all_encoders.push_back(node);
+        // all_encoders.push_back(node);
+        // break;
+        if (all_encoders.empty() ||
+            IsDirectPredecessorOf(all_encoders.back(), node)) {
+          all_encoders.push_back(node);
+        } else {
+          break;
+        }
       }
     }
-    VLOG(3) << "Found " << all_encoders.size() << " single_encoder";
+    VLOG(3) << "Found continuous " << all_encoders.size() << " single_encoder";
     if (all_encoders.size() == 0) {
       return;
     }
@@ -603,6 +609,7 @@ class XPUMultiEncoderFuser {
         // CHECK(mask_name == op_info->Input("Mask").front());
       }
     }
+    std::cout << "mask_name: " << mask_name << std::endl;
 
     std::set<const Node*> to_remove;
     Node* first_encoder = all_encoders[0];
@@ -624,7 +631,12 @@ class XPUMultiEncoderFuser {
 
       auto* cur_out =
           graph->RetrieveArgument(op_info->Output("Outputs").front());
-      if (i == 0) {
+      if (all_encoders.size() == 1) {
+        // take care of only one encoder
+        in_name = op_info->Input("Inputs").front();
+        mask_name = op_info->Input("Mask").front();
+        out_name = op_info->Output("Outputs").front();
+      } else if (i == 0) {
         // first encoder
         to_remove.insert(cur_out);
         in_name = op_info->Input("Inputs").front();
@@ -673,6 +685,8 @@ class XPUMultiEncoderFuser {
     auto* scope = multi_encoder_stmt->op()->scope();
     std::vector<float> fc_weight_max(arg_map["FCWeight"].size());
     auto& fc_weight_names = arg_map["FCWeight"];
+    std::cout << "fc_weight_names size:" << fc_weight_names.size()
+              << ", enable_qkv_fusion: " << enable_qkv_fusion << std::endl;
     for (size_t i = 0; i < fc_weight_names.size(); ++i) {
       if (enable_qkv_fusion && (i % 6 == 0)) {
         // q/k/v FCWeight fusion
@@ -682,12 +696,24 @@ class XPUMultiEncoderFuser {
         auto weight_q_dims = weight_q->dims();
         auto weight_k_dims = weight_k->dims();
         auto weight_v_dims = weight_v->dims();
+        std::cout << __LINE__ << " weight_q_dims: " << weight_q_dims
+                  << ", weight_k_dims:" << weight_k_dims
+                  << ", weight_v_dims:" << weight_v_dims << std::endl;
         int weight_q_len = weight_q->numel();
         int weight_k_len = weight_k->numel();
         int weight_v_len = weight_v->numel();
         float* weight_q_on_host = weight_q->mutable_data<float>();
         float* weight_k_on_host = weight_k->mutable_data<float>();
         float* weight_v_on_host = weight_v->mutable_data<float>();
+        std::cout << "q weight max: " << paddle::lite::xpu::math::FindMaxAbs(
+                                             weight_q_on_host, weight_q_len)
+                  << std::endl;
+        std::cout << "k weight max: " << paddle::lite::xpu::math::FindMaxAbs(
+                                             weight_k_on_host, weight_k_len)
+                  << std::endl;
+        std::cout << "v weight max: " << paddle::lite::xpu::math::FindMaxAbs(
+                                             weight_v_on_host, weight_v_len)
+                  << std::endl;
         int qkv_len = weight_q_len + weight_k_len + weight_v_len;
         int qkv_offset = 0;
         CHECK_EQ(weight_q_dims[0], weight_k_dims[0]);
@@ -734,7 +760,8 @@ class XPUMultiEncoderFuser {
         float max_f = paddle::lite::xpu::math::FindMaxAbs(
             weight_qkv_trans.get(), qkv_len);
         fc_weight_max[i] = max_f;
-        VLOG(3) << "QKV fused FC-" << i << ", weight_max:" << max_f;
+        VLOG(3) << __LINE__ << " QKV fused FC-" << i
+                << ", weight_max:" << max_f;
         if (fc_precision_ == "int31") {
           memcpy(weight_q->mutable_data<float>(),
                  weight_qkv_trans.get(),
@@ -773,7 +800,7 @@ class XPUMultiEncoderFuser {
 
       float max_f =
           paddle::lite::xpu::math::FindMaxAbs(weight_on_host, weight_len);
-      VLOG(3) << "FC-" << i << ", weight_max:" << max_f;
+      VLOG(3) << __LINE__ << " FC-" << i << ", weight_max:" << max_f;
       // i ranges from 0 to 6*encoder_num, so we need to do i%6 to get relative
       // position in the encoder
       if (fc_precision_ == "int31") {
@@ -816,7 +843,10 @@ class XPUMultiEncoderFuser {
     }
 
     auto& fc_bias_names = arg_map["FCBias"];
+    std::cout << __LINE__ << " fc_bias_names.size: " << fc_bias_names.size()
+              << std::endl;
     for (size_t i = 0; enable_qkv_fusion && i < fc_bias_names.size(); i += 6) {
+      CHECK_EQ(fc_bias_names.size() % 6, 0);
       // q/k/v FCBias fusion
       VLOG(3) << "Copy bias in QKV fused FC-" << i << ", " << i / 6 << "-"
               << i % 6;
@@ -974,6 +1004,7 @@ class XPUMultiEncoderFusePass : public ProgramPass {
               << lite::TargetWrapperXPU::multi_encoder_precision;
     }
     adaptive_seqlen = lite::TargetWrapperXPU::multi_encoder_adaptive_seqlen;
+    std::cout << "adaptive_seqlen: " << adaptive_seqlen << std::endl;
 #endif
 
     for (auto& act_type : act_types) {
