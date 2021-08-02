@@ -29,6 +29,9 @@
 #ifdef LITE_WITH_NVTX
 #include "lite/backends/cuda/nvtx_wrapper.h"
 #endif
+#ifdef LITE_WITH_OPENCL
+#include "lite/backends/opencl/cl_runtime.h"
+#endif
 
 namespace paddle {
 namespace lite {
@@ -115,6 +118,9 @@ struct Instruction {
 
   // Run the instruction.
   void Run();
+#ifdef LITE_WITH_METAL
+  void SaveOutput();
+#endif
 
   friend STL::ostream& operator<<(STL::ostream& os, const Instruction& other);
 
@@ -134,6 +140,14 @@ struct Instruction {
     }
   }
   void Sync() const { kernel_->mutable_context()->As<CUDAContext>().Sync(); }
+#endif
+
+#ifdef LITE_WITH_OPENCL
+  void Flush(const int inst_idx) const {
+    if (TargetType::kOpenCL == kernel_->target()) {
+      CLRuntime::Global()->Flush(inst_idx);
+    }
+  }
 #endif
 
 #ifdef LITE_WITH_PROFILE
@@ -158,7 +172,9 @@ struct Instruction {
   }
 
   void SetProfileRuntimeOpInfo(paddle::lite::profile::OpCharacter* ch) {
+    CHECK(ch != nullptr) << "OpCharacter should not be nullptr.";
     auto* op_lite = static_cast<paddle::lite::OpLite*>(ch->op_lite);
+    CHECK(op_lite != nullptr) << "op_lite should not be nullptr.";
     op_lite->GetOpRuntimeInfo(ch);
   }
 #endif
@@ -191,6 +207,11 @@ class LITE_API RuntimeProgram {
       Scope* exec_scope,
       int block_idx = kRootBlockIdx);
   ~RuntimeProgram() {
+#ifdef LITE_WITH_OPENCL
+    // save program kernel cache & tuned params
+    CLRuntime::Global()->SaveProgram();
+    CLRuntime::Global()->SaveTuned();
+#endif  // LITE_WITH_OPENCL
 #ifdef LITE_WITH_PROFILE
     LOG(INFO) << "\n" << profiler_.Summary(profile::Type::kCreate);
     LOG(INFO) << "\n" << profiler_.Summary(profile::Type::kDispatch);
@@ -216,6 +237,9 @@ class LITE_API RuntimeProgram {
   }
 
   void Run();
+#ifdef LITE_WITH_METAL
+  void SaveOutput();
+#endif
 
   void set_exec_scope(Scope* x) { exec_scope_ = x; }
   Scope* exec_scope() { return exec_scope_; }
@@ -232,14 +256,27 @@ class LITE_API RuntimeProgram {
 
   size_t block_size() { return instructions_.size(); }
 
+#ifndef LITE_ON_TINY_PUBLISH
   // Update the ops and vars of all of blocks to the given program_desc
   // according to the instructions
-  void SaveToProgram(std::shared_ptr<cpp::ProgramDesc> program_desc);
+  void SaveRuntimProgramIntoProgramDesc(
+      std::shared_ptr<cpp::ProgramDesc> program_desc);
+#endif
+
+#ifdef LITE_WITH_METAL
+  void ConfigMetalContext(std::string lib_path,
+                          bool use_mps = false,
+                          bool use_aggressive = false);
+#endif
 
  private:
   RuntimeProgram(const RuntimeProgram&) = delete;
   std::vector<std::vector<Instruction>> instructions_;
   Scope* exec_scope_{};
+
+#ifdef LITE_WITH_METAL
+  std::unique_ptr<KernelContext> metal_ctx_{nullptr};
+#endif
 
 #ifdef LITE_WITH_PROFILE
   profile::Profiler profiler_;

@@ -3,7 +3,7 @@
 # else()
 # endif()
 
-if(LITE_WITH_LIGHT_WEIGHT_FRAMEWORK OR LITE_ON_MODEL_OPTIMIZE_TOOL OR (NOT LITE_WITH_LOG))
+if(LITE_WITH_LIGHT_WEIGHT_FRAMEWORK OR LITE_ON_MODEL_OPTIMIZE_TOOL OR LITE_WITH_PYTHON OR (NOT LITE_WITH_LOG))
   lite_cc_library(logging SRCS logging.cc)
   set(utils_DEPS logging)
   lite_cc_test(test_logging SRCS logging_test.cc DEPS ${utils_DEPS})
@@ -35,3 +35,7 @@ if (WITH_TESTING)
     endif ()
     lite_cc_test(float16_test SRCS float16_test.cc)
 endif()
+
+# timer
+lite_cc_library(timer SRCS timer.cc DEPS ${utils_DEPS})
+lite_cc_test(test_timer SRCS timer_test.cc DEPS ${utils_DEPS})

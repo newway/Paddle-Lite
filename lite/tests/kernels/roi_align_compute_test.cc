@@ -17,16 +17,15 @@
 #include "lite/api/paddle_use_kernels.h"
 #include "lite/api/paddle_use_ops.h"
 #include "lite/core/arena/framework.h"
+#include "lite/tests/utils/fill_data.h"
 
 namespace paddle {
 namespace lite {
 
 static int randint(int beg, int end) {
-  static unsigned int seed = 0;
-  int rd = rand_r(&seed);
-  int range = end - beg + 1;
-  rd = rd % range;
-  return rd + beg;
+  int res = 0;
+  fill_data_rand<int>(&res, beg, end, 1);
+  return res;
 }
 static constexpr int kROISize = 4;
 
@@ -324,16 +323,16 @@ TEST(RoiAlign, precision) {
   // The unit test for roi_align needs the params,
   // which is obtained by runing model by paddle.
   LOG(INFO) << "test roi align op";
-#ifdef LITE_WITH_ARM
+#if defined(LITE_WITH_X86) || defined(LITE_WITH_ARM)
   {
-    Place place(TARGET(kARM));
+    Place place(TARGET(kHost));
     std::unique_ptr<arena::TestCase> tester(
         new RoiAlignComputeTester(place, "def", false));
     arena::Arena arena(std::move(tester), place, 2e-4);
     EXPECT_TRUE(arena.TestPrecision());
   }
   {
-    Place place(TARGET(kARM));
+    Place place(TARGET(kHost));
     std::unique_ptr<arena::TestCase> tester(
         new RoiAlignComputeTester(place, "def", true));
     arena::Arena arena(std::move(tester), place, 2e-4);

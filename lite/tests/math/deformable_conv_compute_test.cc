@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "lite/tests/math/deformable_conv_compute_test.h"
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 #include "lite/core/context.h"
@@ -65,33 +66,6 @@ typedef paddle::lite::operators::DeformableConvParam DeformableConvParam;
 typedef paddle::lite::operators::ActivationParam ActivationParam;
 
 using paddle::lite::profile::Timer;
-
-DDim compute_out_dim(const DDim& dim_in,
-                     const paddle::lite::operators::ConvParam& param) {
-  DDim dim_out = dim_in;
-  auto paddings = *param.paddings;
-  auto dilations = *param.dilations;
-  dim_out[1] = param.filter->dims()[0];
-  auto kernel_h = param.filter->dims()[2];
-  auto kernel_w = param.filter->dims()[3];
-  auto h = dim_in[2];
-  auto w = dim_in[3];
-  int dila_h = dilations[0];
-  int dila_w = dilations[1];
-  int pad_top = paddings[0];
-  int pad_bottom = paddings[1];
-  int pad_left = paddings[2];
-  int pad_right = paddings[3];
-  int stride_h = param.strides[0];
-  int stride_w = param.strides[1];
-  auto kernel_exten = dila_h * (kernel_h - 1) + 1;
-  auto hout = (h + pad_top + pad_bottom - kernel_exten) / stride_h + 1;
-  kernel_exten = dila_w * (kernel_w - 1) + 1;
-  auto wout = (w + pad_left + pad_right - kernel_exten) / stride_w + 1;
-  dim_out[2] = hout;
-  dim_out[3] = wout;
-  return dim_out;
-}
 
 #ifdef LITE_WITH_ARM
 void test_deformable_conv_fp32(const std::vector<DDim>& input_dims,
@@ -217,31 +191,19 @@ void test_deformable_conv_fp32(const std::vector<DDim>& input_dims,
           fill_tensor_const(tout_basic, 0.f);
           auto dout_basic = tout_basic.mutable_data<float>();
           LOG(INFO) << "flag_relu: " << flag_relu;
-          deformable_conv_basic<float, float>(din,
-                                              offset_data,
-                                              mask_data,
-                                              dout_basic,
-                                              dim_in[0],
-                                              dim_out[1],
-                                              dim_out[2],
-                                              dim_out[3],
-                                              dim_in[1],
-                                              dim_in[2],
-                                              dim_in[3],
-                                              wptr,
-                                              bias_ptr,
-                                              group,
-                                              weight_dim[3],
-                                              weight_dim[2],
-                                              strides[1],
-                                              strides[0],
-                                              dilas[1],
-                                              dilas[0],
-                                              pads[2],
-                                              pads[0],
-                                              flag_bias,
-                                              flag_relu,
-                                              modulated);
+          deformable_conv_compute_basic(param.x,
+                                        param.offset,
+                                        param.mask,
+                                        &tout_basic,
+                                        *param.conv_param.filter,
+                                        param.conv_param.bias,
+                                        param.conv_param.groups,
+                                        param.deformable_groups,
+                                        param.im2col_step,
+                                        param.conv_param.strides,
+                                        *param.conv_param.paddings,
+                                        *param.conv_param.dilations,
+                                        flag_relu);
         }
         /// warm up
         for (int i = 0; i < FLAGS_warmup; ++i) {

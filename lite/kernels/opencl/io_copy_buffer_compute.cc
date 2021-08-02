@@ -12,14 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#if defined(_MSC_VER)
-#include "lite/backends/x86/port.h"
-#else
-#include <sys/time.h>
-#endif
 #include "lite/backends/opencl/target_wrapper.h"
 #include "lite/core/kernel.h"
 #include "lite/core/op_registry.h"
+#include "lite/utils/timer.h"
 
 #undef LITE_WITH_LOG
 
@@ -28,20 +24,15 @@ namespace lite {
 namespace kernels {
 namespace opencl {
 
-inline double GetCurrentUS() {
-  struct timeval time;
-  gettimeofday(&time, NULL);
-  return 1e+6 * time.tv_sec + time.tv_usec;
-}
-
 // Host to OpenCL memory.
 float CopyFromHostSync(void* target, const void* source, size_t size) {
 #ifdef LITE_WITH_PROFILE
-  auto h2d_copy_start = GetCurrentUS();
+  lite::Timer timer;
+  timer.Start();
 #endif
   TargetWrapperCL::MemcpySync(target, source, size, IoDirection::HtoD);
 #ifdef LITE_WITH_PROFILE
-  auto h2d_duration = (GetCurrentUS() - h2d_copy_start) / 1000.0;
+  auto h2d_duration = timer.Stop();
   return h2d_duration;
 #else
   return 0.0;
@@ -51,12 +42,30 @@ float CopyFromHostSync(void* target, const void* source, size_t size) {
 // Device to Host memory.
 float CopyToHostSync(void* target, const void* source, size_t size) {
 #ifdef LITE_WITH_PROFILE
-  auto d2h_copy_start = GetCurrentUS();
+  lite::Timer timer;
+  timer.Start();
 #endif
   CLRuntime::Global()->command_queue().finish();
   TargetWrapperCL::MemcpySync(target, source, size, IoDirection::DtoH);
 #ifdef LITE_WITH_PROFILE
-  auto d2h_duration = (GetCurrentUS() - d2h_copy_start) / 1000.0;
+  auto d2h_duration = timer.Stop();
+  return d2h_duration;
+#else
+  return 0.0;
+#endif
+}
+// Device to Device memory.
+float CopyFromDeviceToDeviceSync(void* target,
+                                 const void* source,
+                                 size_t size) {
+#ifdef LITE_WITH_PROFILE
+  lite::Timer timer;
+  timer.Start();
+#endif
+  CLRuntime::Global()->command_queue().finish();
+  TargetWrapperCL::MemcpySync(target, source, size, IoDirection::DtoD);
+#ifdef LITE_WITH_PROFILE
+  auto d2h_duration = timer.Stop();
   return d2h_duration;
 #else
   return 0.0;
@@ -78,8 +87,10 @@ class IoCopyHostToOpenCLCompute
 
   void Run() override {
     auto& param = Param<operators::IoCopyParam>();
+    CHECK(param.x);
     CHECK(param.x->target() == TARGET(kHost) ||
           param.x->target() == TARGET(kARM));
+
     auto mem_size = param.x->memory_size();
 #ifdef LITE_WITH_LOG
     VLOG(2) << "param.x->memory_size():" << mem_size;
@@ -89,6 +100,8 @@ class IoCopyHostToOpenCLCompute
     VLOG(2) << "param.y->dims():" << param.y->dims();
 #endif
     auto* data = param.y->mutable_data(TARGET(kOpenCL), mem_size);
+    CHECK(data);
+    CHECK(param.x->raw_data());
     h2d_duration_ = CopyFromHostSync(data, param.x->raw_data(), mem_size);
   }
 
@@ -138,8 +151,10 @@ class IoCopykOpenCLToHostCompute
     const cl::Buffer* x_ptr;
     if (param.process_type == 1) {
       x_ptr = param.x->data<uint8_t, cl::Buffer>();
+      param.y->set_precision(PRECISION(kUInt8));
     } else {
       x_ptr = param.x->data<float, cl::Buffer>();
+      param.y->set_precision(PRECISION(kFloat));
     }
 
 #ifdef LITE_WITH_LOG
@@ -171,8 +186,9 @@ REGISTER_LITE_KERNEL(io_copy,
                      kAny,
                      paddle::lite::kernels::opencl::IoCopyHostToOpenCLCompute,
                      host_to_device)
-    .BindInput("Input", {LiteType::GetTensorTy(TARGET(kHost))})
-    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kOpenCL))})
+    .BindInput("Input", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kAny))})
+    .BindOutput("Out",
+                {LiteType::GetTensorTy(TARGET(kOpenCL), PRECISION(kAny))})
     .Finalize();
 
 REGISTER_LITE_KERNEL(io_copy,
@@ -181,8 +197,9 @@ REGISTER_LITE_KERNEL(io_copy,
                      kAny,
                      paddle::lite::kernels::opencl::IoCopykOpenCLToHostCompute,
                      device_to_host)
-    .BindInput("Input", {LiteType::GetTensorTy(TARGET(kOpenCL))})
-    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kHost))})
+    .BindInput("Input",
+               {LiteType::GetTensorTy(TARGET(kOpenCL), PRECISION(kAny))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kAny))})
     .Finalize();
 
 REGISTER_LITE_KERNEL(io_copy_once,
@@ -191,8 +208,9 @@ REGISTER_LITE_KERNEL(io_copy_once,
                      kAny,
                      paddle::lite::kernels::opencl::IoCopyHostToOpenCLCompute,
                      host_to_device)
-    .BindInput("Input", {LiteType::GetTensorTy(TARGET(kHost))})
-    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kOpenCL))})
+    .BindInput("Input", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kAny))})
+    .BindOutput("Out",
+                {LiteType::GetTensorTy(TARGET(kOpenCL), PRECISION(kAny))})
     .Finalize();
 
 REGISTER_LITE_KERNEL(io_copy_once,
@@ -201,8 +219,9 @@ REGISTER_LITE_KERNEL(io_copy_once,
                      kAny,
                      paddle::lite::kernels::opencl::IoCopykOpenCLToHostCompute,
                      device_to_host)
-    .BindInput("Input", {LiteType::GetTensorTy(TARGET(kOpenCL))})
-    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kHost))})
+    .BindInput("Input",
+               {LiteType::GetTensorTy(TARGET(kOpenCL), PRECISION(kAny))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kAny))})
     .Finalize();
 
 #define LITE_WITH_LOG

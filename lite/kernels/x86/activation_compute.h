@@ -22,6 +22,7 @@
 #define _USE_MATH_DEFINES
 #endif
 
+#include "lite/backends/x86/math/activation.h"
 #include "lite/backends/x86/math/blas.h"
 #include "lite/core/kernel.h"
 #include "lite/core/op_lite.h"
@@ -305,6 +306,69 @@ class Relu6Compute : public KernelLite<TARGET(kX86), PRECISION(kFloat)> {
   }
 
   virtual ~Relu6Compute() = default;
+};
+
+template <typename T>
+struct SqrtFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out>
+  void operator()(Device d, X x, Out out) const {
+    out.device(d) = x.sqrt();
+  }
+};
+
+template <typename T>
+class SqrtCompute : public KernelLite<TARGET(kX86), PRECISION(kFloat)> {
+ public:
+  using param_t = operators::ActivationParam;
+
+  void Run() override {
+    auto& param = *param_.get_mutable<operators::ActivationParam>();
+    param.Out->template mutable_data<T>();
+    Activate<SqrtFunctor<T>>(param.X, param.Out);
+  }
+
+  virtual ~SqrtCompute() = default;
+};
+
+template <typename T>
+struct RsqrtFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out>
+  void operator()(Device d, X x, Out out) const {
+    out.device(d) = x.rsqrt();
+  }
+};
+
+template <typename T>
+class RsqrtCompute : public KernelLite<TARGET(kX86), PRECISION(kFloat)> {
+ public:
+  using param_t = operators::ActivationParam;
+
+  void Run() override {
+    auto& param = *param_.get_mutable<operators::ActivationParam>();
+    param.Out->template mutable_data<T>();
+    Activate<RsqrtFunctor<T>>(param.X, param.Out);
+  }
+
+  virtual ~RsqrtCompute() = default;
+};
+
+template <typename T>
+class MishCompute : public KernelLite<TARGET(kX86), PRECISION(kFloat)> {
+ public:
+  using param_t = operators::ActivationParam;
+
+  void Run() override {
+    auto& param = *param_.get_mutable<operators::ActivationParam>();
+    param.Out->template mutable_data<T>();
+    auto x_dims = param.X->dims();
+    auto x_data = param.X->template data<T>();
+    auto output_data = param.Out->template mutable_data<T>();
+    float threshold = param.threshold;
+    lite::x86::math::mish<T>(
+        x_data, output_data, x_dims.production(), threshold);
+  }
+
+  virtual ~MishCompute() = default;
 };
 
 }  // namespace x86
