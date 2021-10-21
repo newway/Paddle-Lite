@@ -16,8 +16,8 @@
 #include <string>
 #include "lite/api/paddle_use_kernels.h"
 #include "lite/api/paddle_use_ops.h"
-#include "lite/core/arena/framework.h"
 #include "lite/core/tensor.h"
+#include "lite/core/test/arena/framework.h"
 #include "lite/tests/utils/fill_data.h"
 
 namespace paddle {
@@ -433,7 +433,7 @@ void TestInterpAlignCorners(Place place, float abs_error = 2e-5) {
   for (auto x_dims : std::vector<std::vector<int64_t>>{{3, 4, 8, 9}}) {
     for (bool align_corners : {true, false}) {
       std::unique_ptr<arena::TestCase> tester(new NearestInterpComputeTester(
-          place, "def", DDim(x_dims), "nearest", 0.4, -1, -1, align_corners));
+          place, "def", DDim(x_dims), "nearest", -1, 4, 4, align_corners));
       arena::Arena arena(std::move(tester), place, abs_error);
       arena.TestPrecision();
     }
@@ -453,14 +453,17 @@ void TestInterpAlignMode(Place place, float abs_error = 2e-5) {
             !align_corners) {
           continue;
         }
+#if defined(LITE_WITH_NNADAPTER) && defined(NNADAPTER_WITH_HUAWEI_ASCEND_NPU)
+        if (align_mode == 0 && align_corners) continue;
+#endif
         std::unique_ptr<arena::TestCase> tester(
             new NearestInterpComputeTester(place,
                                            "def",
                                            DDim(x_dims),
                                            "bilinear",
-                                           0.7,
-                                           -1,
-                                           -1,
+                                           -1.,
+                                           5,
+                                           6,
                                            align_corners,
                                            align_mode));
         arena::Arena arena(std::move(tester), place, abs_error);
@@ -502,7 +505,21 @@ void TestInterpOuthw_fp16(Place place, float abs_error = 2e-5) {
 TEST(Interp, precision) {
   Place place;
   float abs_error = 2e-5;
-#if defined(LITE_WITH_NPU)
+#if defined(LITE_WITH_NNADAPTER)
+  place = TARGET(kNNAdapter);
+#if defined(NNADAPTER_WITH_HUAWEI_ASCEND_NPU)
+  abs_error = 5e-2;
+  TestInterpOuthw(place, abs_error);
+  TestInterpScale(place, abs_error);
+  TestInterpInputScale(place, abs_error);
+  TestInterpOutsize(place, abs_error);
+  TestInterpAlignCorners(place, abs_error);
+  TestInterpAlignMode(place, abs_error);
+  return;
+#else
+  return;
+#endif
+#elif defined(LITE_WITH_NPU)
   place = TARGET(kNPU);
   abs_error = 1e-2;  // use fp16 in npu
 #elif defined(LITE_WITH_HUAWEI_ASCEND_NPU)

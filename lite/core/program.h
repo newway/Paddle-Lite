@@ -153,7 +153,7 @@ struct Instruction {
 #ifdef LITE_WITH_PROFILE
   void set_profiler(profile::Profiler* profiler) {
     profiler_ = profiler;
-#ifndef LITE_WITH_FPGA
+#if !defined(LITE_WITH_FPGA) && !defined(LITE_WITH_METAL)
     if (op_->Type() != "feed" && op_->Type() != "fetch") {
 #endif
       profile::OpCharacter ch;
@@ -166,7 +166,7 @@ struct Instruction {
       // append `ch.kernel_func_name` in StopTiming
       profile_id_ = profiler->NewTimer(ch);
       kernel_->SetProfiler(profiler_, profile_id_);
-#ifndef LITE_WITH_FPGA
+#if !defined(LITE_WITH_FPGA) && !defined(LITE_WITH_METAL)
     }
 #endif
   }
@@ -256,6 +256,10 @@ class LITE_API RuntimeProgram {
 
   size_t block_size() { return instructions_.size(); }
 
+  void set_version(const int64_t version) { version_ = version; }
+
+  const int64_t get_version() const { return version_; }
+
 #ifndef LITE_ON_TINY_PUBLISH
   // Update the ops and vars of all of blocks to the given program_desc
   // according to the instructions
@@ -266,13 +270,16 @@ class LITE_API RuntimeProgram {
 #ifdef LITE_WITH_METAL
   void ConfigMetalContext(std::string lib_path,
                           bool use_mps = false,
-                          bool use_aggressive = false);
+                          bool use_aggressive = false,
+                          bool use_memory_reuse_ = false,
+                          void* device = nullptr);
 #endif
 
  private:
   RuntimeProgram(const RuntimeProgram&) = delete;
   std::vector<std::vector<Instruction>> instructions_;
   Scope* exec_scope_{};
+  int64_t version_{0};
 
 #ifdef LITE_WITH_METAL
   std::unique_ptr<KernelContext> metal_ctx_{nullptr};

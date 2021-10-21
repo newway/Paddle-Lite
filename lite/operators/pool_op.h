@@ -39,9 +39,10 @@ class PoolOpLite : public OpLite {
 
   bool InferShapeImpl() const override;
 
+  bool InferShapeWithCache() const override { return true; }
+
   // TODO(Superjomn) replace framework::OpDesc with a lite one.
   bool AttachImpl(const cpp::OpDesc &op_desc, lite::Scope *scope) override {
-    AttachParam(&param_);
     auto x = op_desc.Input("X").front();
     auto out = op_desc.Output("Out").front();
 
@@ -85,6 +86,11 @@ class PoolOpLite : public OpLite {
     }
     param_.paddings = std::make_shared<std::vector<int>>(paddings);
 
+#ifdef LITE_WITH_XPU
+    if (op_desc.HasAttr("pad_zero")) {
+      param_.pad_zero = op_desc.GetAttr<bool>("pad_zero");
+    }
+#endif
     return true;
   }
 

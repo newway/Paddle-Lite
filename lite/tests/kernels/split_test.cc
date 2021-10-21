@@ -15,7 +15,7 @@
 #include <gtest/gtest.h>
 #include "lite/api/paddle_use_kernels.h"
 #include "lite/api/paddle_use_ops.h"
-#include "lite/core/arena/framework.h"
+#include "lite/core/test/arena/framework.h"
 #include "lite/tests/utils/fill_data.h"
 
 namespace paddle {
@@ -149,14 +149,17 @@ class SplitTester : public arena::TestCase {
 
     if (!axis_tensor_.empty()) {
       std::vector<int> axis_data{axis_};
-      SetCommonTensor(axis_tensor_, DDim{{1}}, axis_data.data());
+      SetCommonTensor(axis_tensor_, DDim{{1}}, axis_data.data(), {}, true);
     }
 
     if (!sections_tensor_list_.empty()) {
       for (size_t i = 0; i < sections_.size(); i++) {
         std::vector<int> sections_data{sections_[i]};
-        SetCommonTensor(
-            sections_tensor_list_[i], DDim{{1}}, sections_data.data());
+        SetCommonTensor(sections_tensor_list_[i],
+                        DDim{{1}},
+                        sections_data.data(),
+                        {},
+                        true);
       }
     }
   }
@@ -247,11 +250,34 @@ void TestSplitSectionsTensorList(Place place,
                true);
 }
 
-#if defined(LITE_WITH_X86) || defined(LITE_WITH_ARM)
-TEST(split_x86, precision) {
-  Place place{TARGET(kHost)};
-  float abs_error = 1e-5;
-
+TEST(Split_test, precision) {
+  float abs_error = 2e-5;
+  Place place;
+#if defined(LITE_WITH_NNADAPTER)
+  place = TARGET(kNNAdapter);
+#if defined(NNADAPTER_WITH_HUAWEI_ASCEND_NPU)
+  abs_error = 1e-2;
+  TestSplitBase<float>(place, abs_error);
+  TestSplitAxis(place, abs_error);
+  TestSplitNum(place, abs_error);
+  TestSplitSections(place, abs_error);
+  TestSplitAxisTensor(place, abs_error);
+  TestSplitSectionsTensorList(place, abs_error);
+#else
+  return;
+#endif
+#elif defined(LITE_WITH_HUAWEI_ASCEND_NPU)
+  place = TARGET(kHuaweiAscendNPU);
+  abs_error = 1e-2;  // precision_mode default is force_fp16
+  TestSplitBase<float>(place, abs_error);
+  TestSplitBase<int>(place, abs_error);
+  TestSplitBase<int64_t>(place, abs_error);
+  TestSplitAxis(place, abs_error);
+  TestSplitNum(place, abs_error);
+  TestSplitSections(place, abs_error);
+#elif defined(LITE_WITH_X86) || defined(LITE_WITH_ARM)
+  place = TARGET(kHost);
+  abs_error = 1e-5;
   TestSplitBase<float>(place, abs_error, "def");
   TestSplitBase<int>(place, abs_error, "int32");
   TestSplitBase<int64_t>(place, abs_error, "int64");
@@ -260,21 +286,10 @@ TEST(split_x86, precision) {
   TestSplitSections(place, abs_error);
   TestSplitAxisTensor(place, abs_error);
   TestSplitSectionsTensorList(place, abs_error);
-}
+#else
+  return;
 #endif
-
-#if defined(LITE_WITH_HUAWEI_ASCEND_NPU)
-TEST(split_ascend_npu_test, precision) {
-  Place place = TARGET(kHuaweiAscendNPU);
-  float abs_error = 1e-2;
-
-  TestSplitBase<float>(place, abs_error);
-  TestSplitBase<int>(place, abs_error);
-  TestSplitBase<int64_t>(place, abs_error);
-  TestSplitAxis(place, abs_error);
-  TestSplitNum(place, abs_error);
-  TestSplitSections(place, abs_error);
 }
-#endif
+
 }  // namespace lite
 }  // namespace paddle

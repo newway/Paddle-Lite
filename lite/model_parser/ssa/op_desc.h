@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "lite/model_parser/general/op_desc.h"
+#include "lite/core/model/general/op_desc.h"
 #include "lite/model_parser/ssa/op_proto.h"
 #include "lite/model_parser/ssa/var_desc.h"
 
@@ -59,6 +59,10 @@ class OpDescBase {
     return outputs_;
   }
 
+  virtual bool tensor_array_copy() const { return false; }
+
+  virtual void set_tensor_array_copy() {}
+
  protected:
   void UpdateVarBlockIdx(const std::weak_ptr<VarDesc>& var_desc,
                          int32_t op_block_idx);
@@ -78,11 +82,48 @@ class OpDesc : public OpDescBase {
          const RootVarScope& scope,
          int32_t block_idx);
 
- private:
+ protected:
   std::weak_ptr<VarDesc> AddInput(const std::string& param,
                                   const std::weak_ptr<VarDesc>& desc);
   std::weak_ptr<VarDesc> AddOutput(const std::string& param,
                                    const std::weak_ptr<VarDesc>& desc);
+
+ private:
+  void InitOpDesc(const general::OpDesc& raw_desc,
+                  const RootVarScope& scope,
+                  int32_t block_idx);
+};
+
+class WriteToArrayOpDesc : public OpDesc {
+ public:
+  WriteToArrayOpDesc() = default;
+  WriteToArrayOpDesc(const general::OpDesc& raw_desc,
+                     const RootVarScope& scope,
+                     int32_t block_idx)
+      : OpDesc(raw_desc, scope, block_idx) {
+    ProcessTensorArrayOp(raw_desc, scope, block_idx);
+  }
+
+ private:
+  void ProcessTensorArrayOp(const general::OpDesc& raw_desc,
+                            const RootVarScope& scope,
+                            int32_t block_idx);
+};
+
+class ReadFromArrayOpDesc : public OpDesc {
+ public:
+  ReadFromArrayOpDesc() = default;
+  ReadFromArrayOpDesc(const general::OpDesc& raw_desc,
+                      const RootVarScope& scope,
+                      int32_t block_idx)
+      : OpDesc(raw_desc, scope, block_idx) {
+    ProcessTensorArrayOp(raw_desc, scope, block_idx);
+  }
+
+ private:
+  void ProcessTensorArrayOp(const general::OpDesc& raw_desc,
+                            const RootVarScope& scope,
+                            int32_t block_idx);
 };
 
 // In order to modify the block operator, we need to know the specific
@@ -105,6 +146,9 @@ class BlockOpDesc : public OpDescBase {
   }
   std::weak_ptr<BlockOpProto> proto() const { return proto_; }
 
+  virtual void UpdateInputOutput(const general::OpDesc& raw_desc,
+                                 const RootVarScope& scope) {}
+
  protected:
   std::shared_ptr<BlockOpProto> proto_;
   std::vector<std::weak_ptr<VarDesc>> extra_inputs_;
@@ -122,6 +166,18 @@ class WhileOp : public BlockOpDesc {
       auto var_desc = scope.GetRootVarDesc(var).lock()->Read(*this);
       inputs_[cond_key_].emplace_back(var_desc);
       extra_inputs_.emplace_back(var_desc);
+    }
+  }
+
+  void UpdateInputOutput(const general::OpDesc& raw_desc,
+                         const RootVarScope& scope) {
+    for (const auto& var : raw_desc.Input(proto_->InKey())) {
+      auto var_desc = scope.GetRootVarDesc(var).lock();
+      inputs_[proto_->InKey()].emplace_back(var_desc);
+    }
+    for (const auto& var : raw_desc.Output(proto_->OutKey())) {
+      auto var_desc = scope.GetRootVarDesc(var).lock()->Read(*this);
+      outputs_[proto_->OutKey()].emplace_back(var_desc);
     }
   }
 
@@ -149,6 +205,18 @@ class ConditionalBlockOp : public BlockOpDesc {
       : BlockOpDesc{
             raw_desc,
             BlockOpProtoRegistry::instance().GetProto(raw_desc.Type())} {}
+
+  void UpdateInputOutput(const general::OpDesc& raw_desc,
+                         const RootVarScope& scope) {
+    for (const auto& var : raw_desc.Input(proto_->InKey())) {
+      auto var_desc = scope.GetRootVarDesc(var).lock();
+      inputs_[proto_->InKey()].emplace_back(var_desc);
+    }
+    for (const auto& var : raw_desc.Output(proto_->OutKey())) {
+      auto var_desc = scope.GetRootVarDesc(var).lock()->Read(*this);
+      outputs_[proto_->OutKey()].emplace_back(var_desc);
+    }
+  }
 };
 
 class BlockOpGen {
@@ -208,26 +276,36 @@ class WriteBackOp : public OpDescBase {
  public:
   WriteBackOp(const std::weak_ptr<VarDesc>& src,
               const std::weak_ptr<VarDesc>& dst,
-              int32_t block_idx);
+              int32_t block_idx,
+              bool tensor_array_copy);
 
   const general::OpDesc& src_raw_desc() const override { return fake_desc_; }
 
   std::string type() const override { return type_; }
+
+  std::vector<std::weak_ptr<VarDesc>> input_lod_deps() const;
+
+  bool tensor_array_copy() const override { return tensor_array_copy_; }
+
+  void set_tensor_array_copy() override { tensor_array_copy_ = true; }
 
  private:
   void AddInput(const std::string& param,
                 const std::weak_ptr<VarDesc>& desc,
                 int32_t block_idx);
 
-  static constexpr char type_[]{"write_back"};
+  static constexpr char const type_[] = "write_back";
   // In order to adapt to the operator registration system,
   // the dependent parameters are classified by variable types here.
-  static constexpr char input_lod_deps_[]{"Dep_LoDTensor"};
-  static constexpr char input_lod_array_deps_[]{"Dep_LoDTensorArray"};
-  static constexpr char input_src_[]{"Src_LoDTensor"};
+  static constexpr char const input_lod_deps_[] = "Dep_LoDTensor";
+  static constexpr char const input_lod_array_deps_[] = "Dep_LoDTensorArray";
+  static constexpr char const input_src_[] = "Src_LoDTensor";
+  static constexpr char const input_src_array_[] = "Src_LoDTensorArray";
   // For directed acyclic, input is used as output here.
-  static constexpr char input_dst_[]{"Dst_LoDTensor"};
+  static constexpr char const input_dst_[] = "Dst_LoDTensor";
+  static constexpr char const input_dst_array_[] = "Dst_LoDTensorArray";
   general::OpDesc fake_desc_;
+  bool tensor_array_copy_{false};
 };
 
 }  // namespace ssa

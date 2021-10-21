@@ -21,7 +21,7 @@
 #include "lite/core/op_registry.h"
 #include "lite/kernels/opencl/image_helper.h"
 #include "lite/operators/op_params.h"
-#include "lite/utils/logging.h"
+#include "lite/utils/log/logging.h"
 #include "lite/utils/replace_stl/stream.h"
 #ifdef LITE_WITH_PROFILE
 #include "lite/core/profile/profiler.h"
@@ -252,23 +252,23 @@ class ElementwiseMulImageCompute
 }  // namespace lite
 }  // namespace paddle
 
-namespace ocl = paddle::lite::kernels::opencl;
-REGISTER_LITE_KERNEL(elementwise_mul,
-                     kOpenCL,
-                     kFP16,
-                     kImageDefault,
-                     ocl::ElementwiseMulImageCompute,
-                     def)
-    .BindInput("X",
-               {LiteType::GetTensorTy(TARGET(kOpenCL),
-                                      PRECISION(kFP16),
-                                      DATALAYOUT(kImageDefault))})
-    .BindInput("Y",
-               {LiteType::GetTensorTy(TARGET(kOpenCL),
-                                      PRECISION(kFP16),
-                                      DATALAYOUT(kImageDefault))})
-    .BindOutput("Out",
-                {LiteType::GetTensorTy(TARGET(kOpenCL),
-                                       PRECISION(kFP16),
-                                       DATALAYOUT(kImageDefault))})
-    .Finalize();
+// namespace ocl = paddle::lite::kernels::opencl;
+// REGISTER_LITE_KERNEL(elementwise_mul,
+//                      kOpenCL,
+//                      kFP16,
+//                      kImageDefault,
+//                      ocl::ElementwiseMulImageCompute,
+//                      def)
+//     .BindInput("X",
+//                {LiteType::GetTensorTy(TARGET(kOpenCL),
+//                                       PRECISION(kFP16),
+//                                       DATALAYOUT(kImageDefault))})
+//     .BindInput("Y",
+//                {LiteType::GetTensorTy(TARGET(kOpenCL),
+//                                       PRECISION(kFP16),
+//                                       DATALAYOUT(kImageDefault))})
+//     .BindOutput("Out",
+//                 {LiteType::GetTensorTy(TARGET(kOpenCL),
+//                                        PRECISION(kFP16),
+//                                        DATALAYOUT(kImageDefault))})
+//     .Finalize();

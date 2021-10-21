@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <thread>  // NOLINT
 #include <vector>
 #include "acl/acl.h"
 #include "core/hal/types.h"
@@ -33,11 +34,15 @@ class AclModelClient {
   bool GetModelIOTensorDim(std::vector<ge::TensorDesc>* input_tensor_descs,
                            std::vector<ge::TensorDesc>* output_tensor_descs);
   bool Process(uint32_t input_count,
+               std::vector<NNAdapterOperandType>* input_types,
                hal::Argument* input_arguments,
                uint32_t output_count,
+               std::vector<NNAdapterOperandType>* output_types,
                hal::Argument* output_arguments);
 
  private:
+  void InitAclClientEnv(int device_id);
+  void FinalizeAclClientEnv();
   bool CreateModelIODataset();
   void DestroyDataset(aclmdlDataset** dataset);
 

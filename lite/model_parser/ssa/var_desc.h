@@ -17,10 +17,11 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "lite/model_parser/general/block_desc.h"
-#include "lite/model_parser/general/var_desc.h"
+#include "lite/core/model/general/block_desc.h"
+#include "lite/core/model/general/var_desc.h"
 
 namespace paddle {
 namespace lite {
@@ -42,14 +43,30 @@ class VarDesc : public std::enable_shared_from_this<VarDesc> {
 
   VarDesc(int32_t block_idx, const general::VarDesc* raw_desc)
       : block_idx_{block_idx}, meta_{std::make_shared<MetaInfo>()} {
-    meta_->raw_desc = raw_desc;
+    SetPersistable(*raw_desc);
+    meta_->raw_desc =
+        std::unique_ptr<const general::VarDesc,
+                        std::function<void(const general::VarDesc*)>>(
+            raw_desc, [](const general::VarDesc*) {});
+  }
+
+  VarDesc(int32_t block_idx, general::VarDesc&& raw_desc)
+      : block_idx_{block_idx}, meta_{std::make_shared<MetaInfo>()} {
+    SetPersistable(raw_desc);
+    meta_->raw_desc =
+        std::unique_ptr<const general::VarDesc,
+                        std::function<void(const general::VarDesc*)>>(
+            new general::VarDesc(std::move(raw_desc)),
+            [](const general::VarDesc* p) { delete p; });
   }
 
   int32_t block_idx() const { return block_idx_; }
 
   void ResetBlockIdx(int32_t idx) { block_idx_ = idx; }
 
-  const general::VarDesc* root_var_desc() const { return meta_->raw_desc; }
+  const general::VarDesc* root_var_desc() const {
+    return meta_->raw_desc.get();
+  }
 
   std::string root_name() const { return meta_->raw_desc->Name(); }
 
@@ -78,14 +95,24 @@ class VarDesc : public std::enable_shared_from_this<VarDesc> {
 
   void ClearTargetOps() { targets_.clear(); }
 
+  void SetPersistable(const general::VarDesc& raw_desc) {
+    if (raw_desc.Persistable()) {
+      persistable_ = true;
+      mutable_ = false;
+    }
+  }
+
  private:
   struct MetaInfo {
-    general::VarDesc const* raw_desc{nullptr};
+    std::unique_ptr<const general::VarDesc,
+                    std::function<void(const general::VarDesc*)>>
+        raw_desc;
     std::vector<std::shared_ptr<VarDesc>> series;
   };
   int32_t block_idx_{kInvalidIdx};
   std::shared_ptr<MetaInfo> meta_;
   bool mutable_{true};
+  bool persistable_{false};
   std::vector<OpDescBase const*> targets_;
   size_t count_{0};
 };
@@ -107,20 +134,35 @@ class RootVarScope {
   explicit RootVarScope(const general::BlockDesc& current)
       : RootVarScope{current, nullptr} {}
 
+  void AddRootVar(int32_t block_idx, const general::VarDesc& raw_var);
+
+  void AddRootVar(int32_t block_idx, general::VarDesc&& raw_var);
+
   std::vector<std::weak_ptr<VarDesc>> GetRootVars() const;
+
+  bool HasRootVarDesc(const std::string& name) const;
 
   std::weak_ptr<VarDesc> GetRootVarDesc(const std::string& name) const;
 
   const RootVarScope* parent() const { return parent_; }
 
-  const RootVarScope* kid() const { return kid_; }
+  const std::vector<RootVarScope*>& kids() const { return kids_; }
 
  protected:
-  void SetKidScope(const RootVarScope& kid) { kid_ = &kid; }
+  void AddKidScope(RootVarScope* kid) {
+    CHECK(kid);
+    kids_.emplace_back(kid);
+  }
+
+  RootVarScope* GetMutableScopeOfRootVar(const std::string& name);
+
+  const std::map<std::string, std::shared_ptr<VarDesc>>& GetRootVarsMap() {
+    return root_vars_;
+  }
 
  private:
-  const RootVarScope* kid_{nullptr};
-  const RootVarScope* parent_{nullptr};
+  std::vector<RootVarScope*> kids_;
+  RootVarScope* parent_{nullptr};
   std::map<std::string, std::shared_ptr<VarDesc>> root_vars_;
 };
 

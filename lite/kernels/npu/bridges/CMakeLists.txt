@@ -1,50 +1,11 @@
-add_subgraph_bridge(SRCS act_op.cc
-                    argmax_op.cc
-                    argmax_op_test.cc
-                    batch_norm_op.cc
-                    compare_op.cc
-                    concat_op.cc
-                    conv_op.cc
-                    conv_transpose_op.cc
-                    dropout_op.cc
-                    elementwise_ops.cc
-                    expand_op.cc
-                    fc_op.cc
-                    fill_constant_batch_size_like_op.cc
-                    fill_constant_op.cc
-                    gather_op.cc
-                    graph.cc
-                    increment_op.cc
-                    instance_norm_op.cc
-                    interpolate_op.cc
-                    layer_norm_op.cc
-                    lookup_table_op.cc
-                    matmul_op.cc
-                    mul_op.cc
-                    pad2d_op.cc
-                    pool_op.cc
-                    reduce_mean_op.cc
-                    reduce_mean_op_test.cc
-                    reshape_op.cc
-                    scale_op.cc
-                    shape_op.cc
-                    shuffle_channel_op.cc
-                    softmax_op.cc
-                    split_op.cc
-                    split_op_test.cc
-                    topk_op.cc
-                    transpose_op.cc
-                    unsqueeze_op.cc
-                    utility.cc)
-
 if(NOT LITE_WITH_NPU)
   return()
 endif()
 
-lite_cc_library(subgraph_bridge_utility_npu SRCS utility.cc DEPS ${npu_builder_libs} tensor)
+lite_cc_library(subgraph_bridge_utility_npu SRCS utility.cc DEPS ${npu_builder_libs} core)
 lite_cc_library(subgraph_bridge_graph_npu SRCS graph.cc DEPS subgraph_bridge_utility_npu)
 
-set(npu_subgraph_bridge_deps subgraph_bridge_registry subgraph_bridge_utility_npu subgraph_bridge_graph_npu)
+set(npu_subgraph_bridge_deps core subgraph_bridge_utility_npu subgraph_bridge_graph_npu)
 
 lite_cc_library(subgraph_bridge_fc_op_npu SRCS fc_op.cc DEPS ${npu_subgraph_bridge_deps})
 lite_cc_library(subgraph_bridge_conv_op_npu SRCS conv_op.cc DEPS ${npu_subgraph_bridge_deps})
@@ -82,7 +43,7 @@ lite_cc_library(subgraph_bridge_expand_op_npu SRCS expand_op.cc DEPS ${npu_subgr
 
 
 set(npu_subgraph_bridges
-        subgraph_bridge_registry
+        core
         subgraph_bridge_utility_npu
         subgraph_bridge_graph_npu
         subgraph_bridge_fc_op_npu

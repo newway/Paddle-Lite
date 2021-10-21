@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "lite/core/subgraph_bridge_registry.h"
+#include "lite/core/subgraph/subgraph_bridge_registry.h"
 #include "lite/kernels/npu/bridges/graph.h"
 #include "lite/kernels/npu/bridges/utility.h"
 #include "lite/operators/conv_op.h"
@@ -52,8 +52,9 @@ int ConvTransposeConverter(void* ctx, OpLite* op, KernelBase* kernel) {
     return FAILED;
   }
 
-  auto fuse_relu =
-      op_info->HasAttr("fuse_relu") && op_info->GetAttr<bool>("fuse_relu");
+  auto fuse_relu = op_info->HasAttr("with_act") &&
+                   op_info->GetAttr<bool>("with_act") &&
+                   op_info->GetAttr<std::string>("act_type") == "relu";
   std::vector<int> output_size;
   if (op_info->HasAttr("output_size")) {
     output_size = op_info->GetAttr<std::vector<int>>("output_size");

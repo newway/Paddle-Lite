@@ -22,13 +22,13 @@ namespace runtime {
 
 Model::~Model() {
   for (auto& operand : model_.operands) {
-    if (operand.type.lifetime == NNADAPTER_CONSTANT_COPY && operand.buffer) {
+    if ((operand.type.lifetime == NNADAPTER_CONSTANT_COPY ||
+         operand.type.lifetime == NNADAPTER_TEMPORARY_SHAPE) &&
+        operand.buffer) {
       free(operand.buffer);
     }
-    if ((operand.type.precision ==
-             NNADAPTER_TENSOR_QUANT_INT8_SYMM_PER_CHANNEL ||
-         operand.type.precision ==
-             NNADAPTER_TENSOR_QUANT_INT32_SYMM_PER_CHANNEL) &&
+    if ((operand.type.precision == NNADAPTER_QUANT_INT8_SYMM_PER_CHANNEL ||
+         operand.type.precision == NNADAPTER_QUANT_INT32_SYMM_PER_CHANNEL) &&
         operand.type.symm_per_channel_params.scales) {
       free(operand.type.symm_per_channel_params.scales);
     }
@@ -39,8 +39,8 @@ int Model::AddOperand(const NNAdapterOperandType& type,
                       hal::Operand** operand) {
   *operand = nnadapter::AddOperand(&model_);
   memcpy(&(*operand)->type, &type, sizeof(NNAdapterOperandType));
-  if (type.precision == NNADAPTER_TENSOR_QUANT_INT8_SYMM_PER_CHANNEL ||
-      type.precision == NNADAPTER_TENSOR_QUANT_INT32_SYMM_PER_CHANNEL) {
+  if (type.precision == NNADAPTER_QUANT_INT8_SYMM_PER_CHANNEL ||
+      type.precision == NNADAPTER_QUANT_INT32_SYMM_PER_CHANNEL) {
     uint32_t scale_size =
         type.symm_per_channel_params.scale_count * sizeof(float);
     float* scales = reinterpret_cast<float*>(malloc(scale_size));

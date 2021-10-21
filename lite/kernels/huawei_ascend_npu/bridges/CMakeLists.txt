@@ -1,30 +1,3 @@
-add_subgraph_bridge(SRCS act_op.cc
-                    argmax_op.cc
-                    batch_norm_op.cc
-                    cast_op.cc
-                    concat_op.cc
-                    conv_op.cc
-                    dropout_op.cc
-                    elementwise_ops.cc
-                    fc_op.cc
-                    flatten_op.cc
-                    gather_op.cc
-                    graph.cc
-                    interpolate_op.cc
-                    layer_norm_op.cc
-                    matmul_op.cc
-                    pool_op.cc
-                    prior_box_op.cc
-                    reduce_mean_op.cc
-                    reshape_op.cc
-                    scale_op.cc
-                    shape_op.cc
-                    slice_op.cc
-                    softmax_op.cc
-                    transpose_op.cc
-                    unsqueeze_op.cc
-                    utility.cc)
-
 if(NOT LITE_WITH_HUAWEI_ASCEND_NPU)
   return()
 endif()
@@ -32,7 +5,7 @@ endif()
 lite_cc_library(subgraph_bridge_utility_huawei_ascend_npu SRCS utility.cc DEPS)
 lite_cc_library(subgraph_bridge_graph_huawei_ascend_npu SRCS graph.cc DEPS subgraph_bridge_utility_huawei_ascend_npu)
 
-set(huawei_ascend_npu_subgraph_bridge_deps subgraph_bridge_registry subgraph_bridge_utility_huawei_ascend_npu subgraph_bridge_graph_huawei_ascend_npu)
+set(huawei_ascend_npu_subgraph_bridge_deps core subgraph_bridge_utility_huawei_ascend_npu subgraph_bridge_graph_huawei_ascend_npu)
 
 lite_cc_library(subgraph_bridge_act_op_huawei_ascend_npu SRCS act_op.cc DEPS ${huawei_ascend_npu_subgraph_bridge_deps})
 lite_cc_library(subgraph_bridge_conv_op_huawei_ascend_npu SRCS conv_op.cc DEPS ${huawei_ascend_npu_subgraph_bridge_deps})
@@ -66,7 +39,7 @@ lite_cc_library(subgraph_bridge_norm_op_huawei_ascend_npu SRCS norm_op.cc DEPS $
 lite_cc_library(subgraph_bridge_pow_op_huawei_ascend_npu SRCS pow_op.cc DEPS ${huawei_ascend_npu_subgraph_bridge_deps})
 lite_cc_library(subgraph_bridge_log_op_huawei_ascend_npu SRCS log_op.cc DEPS ${huawei_ascend_npu_subgraph_bridge_deps})
 set(huawei_ascend_npu_subgraph_bridges
-        subgraph_bridge_registry
+        core
         subgraph_bridge_graph_huawei_ascend_npu
         subgraph_bridge_act_op_huawei_ascend_npu
         subgraph_bridge_conv_op_huawei_ascend_npu

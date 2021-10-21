@@ -18,6 +18,7 @@
 #include <string>
 #include "driver/huawei_ascend_npu/utility.h"
 #include "utility/logging.h"
+#include "utility/utility.h"
 
 namespace nnadapter {
 namespace huawei_ascend_npu {
@@ -30,12 +31,28 @@ AclModelClient::AclModelClient(int device_id) {
   NNADAPTER_VLOG(3) << "device_count: " << device_count;
   NNADAPTER_CHECK_GE(device_id, 0);
   NNADAPTER_CHECK_LT(device_id, device_count);
-  ACL_CALL(aclrtSetDevice(device_id));
-  device_id_ = device_id;
+  InitAclClientEnv(device_id);
 }
 
 AclModelClient::~AclModelClient() {
   UnloadModel();
+  FinalizeAclClientEnv();
+}
+
+void AclModelClient::InitAclClientEnv(int device_id) {
+  device_id_ = device_id;
+  NNADAPTER_VLOG(5) << "ACL set device(device_id_=" << device_id_ << ")";
+  ACL_CALL(aclrtSetDevice(device_id_));
+  NNADAPTER_VLOG(5) << "ACL create context";
+  ACL_CALL(aclrtCreateContext(&context_, device_id_));
+}
+
+void AclModelClient::FinalizeAclClientEnv() {
+  NNADAPTER_VLOG(5) << "Destroy ACL context";
+  if (context_) {
+    ACL_CALL(aclrtDestroyContext(context_));
+    context_ = nullptr;
+  }
   NNADAPTER_VLOG(5) << "Reset ACL device(device_id_=" << device_id_ << ")";
   ACL_CALL(aclrtResetDevice(device_id_));
 }
@@ -116,9 +133,9 @@ bool AclModelClient::GetModelIOTensorDim(
     auto data_type = aclmdlGetInputDataType(model_desc_, i);
     auto format = aclmdlGetInputFormat(model_desc_, i);
     std::string name(aclmdlGetInputNameByIndex(model_desc_, i));
-    ge::TensorDesc ge_tensor_desc(ge::Shape(ConvertACLDimensions(dims)),
-                                  ConvertACLFormat(format),
-                                  ConvertACLDataType(data_type));
+    ge::TensorDesc ge_tensor_desc(ge::Shape(ConvertACLDimsToGEDims(dims)),
+                                  ConvertACLFormatToGEFormat(format),
+                                  ConvertACLDataTypeToGEDataType(data_type));
     ge_tensor_desc.SetName(name.c_str());
     input_tensor_descs->push_back(ge_tensor_desc);
   }
@@ -130,9 +147,9 @@ bool AclModelClient::GetModelIOTensorDim(
     auto data_type = aclmdlGetOutputDataType(model_desc_, i);
     auto format = aclmdlGetOutputFormat(model_desc_, i);
     std::string name(aclmdlGetOutputNameByIndex(model_desc_, i));
-    ge::TensorDesc ge_tensor_desc(ge::Shape(ConvertACLDimensions(dims)),
-                                  ConvertACLFormat(format),
-                                  ConvertACLDataType(data_type));
+    ge::TensorDesc ge_tensor_desc(ge::Shape(ConvertACLDimsToGEDims(dims)),
+                                  ConvertACLFormatToGEFormat(format),
+                                  ConvertACLDataTypeToGEDataType(data_type));
     ge_tensor_desc.SetName(name.c_str());
     output_tensor_descs->push_back(ge_tensor_desc);
   }
@@ -209,13 +226,16 @@ void AclModelClient::DestroyDataset(aclmdlDataset** dataset) {
 }
 
 bool AclModelClient::Process(uint32_t input_count,
+                             std::vector<NNAdapterOperandType>* input_types,
                              hal::Argument* input_arguments,
                              uint32_t output_count,
+                             std::vector<NNAdapterOperandType>* output_types,
                              hal::Argument* output_arguments) {
   if (!model_desc_) {
     NNADAPTER_LOG(FATAL) << "No ACL model is loaded.";
     return false;
   }
+  ACL_CALL(aclrtSetCurrentContext(context_));
   auto FindArgumentByIndex = [&](
       hal::Argument* arguments, int index, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
@@ -225,45 +245,84 @@ bool AclModelClient::Process(uint32_t input_count,
     }
     return static_cast<hal::Argument*>(nullptr);
   };
+  NNADAPTER_CHECK(input_types);
+  NNADAPTER_CHECK(input_arguments);
+  NNADAPTER_CHECK(output_types);
+  NNADAPTER_CHECK(output_arguments);
+  NNADAPTER_CHECK_EQ(input_types->size(), input_count);
+  NNADAPTER_CHECK_EQ(output_types->size(), output_count);
   NNADAPTER_CHECK(input_dataset_);
   NNADAPTER_CHECK(output_dataset_);
   NNADAPTER_CHECK_EQ(input_count, aclmdlGetDatasetNumBuffers(input_dataset_));
   NNADAPTER_CHECK_EQ(output_count, aclmdlGetDatasetNumBuffers(output_dataset_));
   // Copy the input data from host to device
   for (uint32_t i = 0; i < input_count; i++) {
-    auto argument = FindArgumentByIndex(input_arguments, i, input_count);
-    NNADAPTER_CHECK(argument) << "Input argument " << i << " does not exist!";
+    auto arg = FindArgumentByIndex(input_arguments, i, input_count);
+    NNADAPTER_CHECK(arg) << "Input argument " << i << " does not exist!";
+    NNADAPTER_CHECK(arg->memory);
+    NNADAPTER_CHECK(arg->access);
+    auto type = &input_types->at(i);
+    auto host_ptr = arg->access(arg->memory, type);
+    NNADAPTER_CHECK(host_ptr);
+    auto length = GetOperandTypeBufferLength(*type);
+    // Query and verify the input dimensions from ACL runtime
+    aclmdlIODims dimensions;
+    ACL_CALL(aclmdlGetInputDims(model_desc_, i, &dimensions));
+    NNADAPTER_CHECK_GE(dimensions.dimCount, type->dimensions.count);
+    bool dynamic_shape = false;
+    for (size_t j = 0; j < dimensions.dimCount; j++) {
+      auto& dimension = dimensions.dims[j];
+      if (dimension == -1) {
+        dimension = type->dimensions.data[j];
+        dynamic_shape = true;
+      } else {
+        NNADAPTER_CHECK_EQ(dimension, type->dimensions.data[j])
+            << "The " << j << "th dimension of the " << i
+            << "th input does not match, expect " << dimension
+            << " but recevied " << type->dimensions.data[j];
+      }
+    }
+    if (dynamic_shape) {
+      aclmdlSetInputDynamicDims(model_id_, input_dataset_, i, &dimensions);
+    }
     auto data_buffer = aclmdlGetDatasetBuffer(input_dataset_, i);
-    auto length = aclGetDataBufferSizeV2(data_buffer);
-    NNADAPTER_CHECK_EQ(length, argument->length)
-        << "The buffer length of model input tensor " << i << "(" << length
-        << ") does not match the buffer length of input argument " << i << "("
-        << argument->length << ")";
+    auto data_size = aclGetDataBufferSizeV2(data_buffer);
+    NNADAPTER_CHECK_LE(length, data_size)
+        << "Not enough device memory for the " << i
+        << "th input tensor, expect >= " << length << " but recevied "
+        << data_size;
     auto device_ptr = aclGetDataBufferAddr(data_buffer);
     NNADAPTER_CHECK(device_ptr);
-    auto host_ptr = reinterpret_cast<void*>(argument->buffer);
-    NNADAPTER_CHECK(host_ptr) << "The buffer of input argument " << i
-                              << " should not be nullptr!";
     ACL_CALL(aclrtMemcpy(
         device_ptr, length, host_ptr, length, ACL_MEMCPY_HOST_TO_DEVICE));
   }
   // Model execution
+  auto start_time = GetCurrentUS();
   ACL_CALL(aclmdlExecute(model_id_, input_dataset_, output_dataset_));
+  NNADAPTER_VLOG(3) << "Process cost " << GetCurrentUS() - start_time << " us";
   // Copy the output data from device to host
   for (uint32_t i = 0; i < output_count; i++) {
-    auto argument = FindArgumentByIndex(output_arguments, i, output_count);
-    NNADAPTER_CHECK(argument) << "Output argument " << i << " does not exist!";
+    auto arg = FindArgumentByIndex(output_arguments, i, output_count);
+    NNADAPTER_CHECK(arg) << "Output argument " << i << " does not exist!";
+    NNADAPTER_CHECK(arg->memory);
+    NNADAPTER_CHECK(arg->access);
+    auto type = &output_types->at(i);
+    aclmdlIODims dimensions;
+    ACL_CALL(aclmdlGetCurOutputDims(model_desc_, i, &dimensions));
+    NNADAPTER_CHECK_EQ(dimensions.dimCount, type->dimensions.count);
+    ConvertACLDimsToGEDims(
+        dimensions, type->dimensions.data, &type->dimensions.count);
+    auto host_ptr = arg->access(arg->memory, type);
+    NNADAPTER_CHECK(host_ptr);
+    auto length = GetOperandTypeBufferLength(*type);
     auto data_buffer = aclmdlGetDatasetBuffer(output_dataset_, i);
-    auto length = aclGetDataBufferSizeV2(data_buffer);
-    NNADAPTER_CHECK_EQ(length, argument->length)
-        << "The buffer length of model output tensor " << i << "(" << length
-        << ") does not match the buffer length of output argument " << i << "("
-        << argument->length << ")";
+    auto data_size = aclGetDataBufferSizeV2(data_buffer);
+    NNADAPTER_CHECK_LE(length, data_size)
+        << "Not enough device memory for the " << i
+        << "th output tensor, expect >= " << length << " but recevied "
+        << data_size;
     auto device_ptr = aclGetDataBufferAddr(data_buffer);
     NNADAPTER_CHECK(device_ptr);
-    auto host_ptr = reinterpret_cast<void*>(argument->buffer);
-    NNADAPTER_CHECK(host_ptr) << "The buffer of output argument " << i
-                              << " should not be nullptr!";
     ACL_CALL(aclrtMemcpy(
         host_ptr, length, device_ptr, length, ACL_MEMCPY_DEVICE_TO_HOST));
   }

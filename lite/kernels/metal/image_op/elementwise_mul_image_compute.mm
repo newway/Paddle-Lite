@@ -1,4 +1,4 @@
-// Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -44,6 +44,12 @@ void ElementwiseMulImageCompute::PrepareForRun() {
 }
 
 void ElementwiseMulImageCompute::Run() {
+    @autoreleasepool {
+        run_without_mps();
+    }
+}
+
+void ElementwiseMulImageCompute::run_without_mps() {
     auto pipline = pipline_;
     auto outTexture = output_buffer_->image();
     auto backend = (__bridge MetalContextImp*)metal_context_->backend();
@@ -85,7 +91,7 @@ void ElementwiseMulImageCompute::setup_without_mps() {
                 }
             }
         } else if (input_buffer_y_->tensor_dim_.size() == 2) {
-            if (param.axis == 0) {
+            if (param.axis == 0 || param.axis == -1) {
                 by_channel = 1;
             }
         } else if (input_buffer_y_->tensor_dim_.size() == 1) {

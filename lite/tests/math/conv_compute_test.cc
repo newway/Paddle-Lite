@@ -14,7 +14,7 @@
 
 #include "lite/tests/math/conv_ut.h"
 
-#ifdef LITE_WITH_ARM
+#if defined(LITE_WITH_ARM) || defined(LITE_WITH_X86)
 void test_conv_fp32(const std::vector<DDim>& input_dims,
                     const DDim& weight_dim,
                     int group,
@@ -45,8 +45,20 @@ void test_conv_fp32(const std::vector<DDim>& input_dims,
   param.dilations = std::make_shared<std::vector<int>>(dilas);
   param.groups = group;
   const float six = 6.f;
-  act_init(
-      param, strides, pads, dilas, group, flag_act, six, leakey_relu_scale);
+  const float scale = 6.f;
+  const float offset = 3.f;
+  const float threshold = 6.f;
+  act_init(param,
+           strides,
+           pads,
+           dilas,
+           group,
+           flag_act,
+           six,
+           leakey_relu_scale,
+           scale,
+           offset,
+           threshold);
 
   param.output = new Tensor;
   param.output->set_precision(PRECISION(kFloat));
@@ -62,6 +74,7 @@ void test_conv_fp32(const std::vector<DDim>& input_dims,
 
   for (auto& cls : power_mode) {
     for (auto& th : thread_num) {
+#ifdef LITE_WITH_ARM
       paddle::lite::kernels::arm::ConvCompute<PRECISION(kFloat),
                                               PRECISION(kFloat)>
           conv;
@@ -69,6 +82,14 @@ void test_conv_fp32(const std::vector<DDim>& input_dims,
           new paddle::lite::KernelContext);
       auto& ctx = ctx1->As<paddle::lite::ARMContext>();
       ctx.SetRunMode(static_cast<paddle::lite_api::PowerMode>(cls), th);
+#else
+      paddle::lite::kernels::x86::Conv2dCompute<PRECISION(kFloat),
+                                                PRECISION(kFloat)>
+          conv;
+      std::unique_ptr<paddle::lite::KernelContext> ctx1(
+          new paddle::lite::KernelContext);
+#endif
+
       /// set param and context
       for (auto& dim_in : input_dims) {
         param.x->Resize(dim_in);
@@ -127,7 +148,10 @@ void test_conv_fp32(const std::vector<DDim>& input_dims,
                                    flag_bias,
                                    flag_act,
                                    six,
-                                   leakey_relu_scale);
+                                   leakey_relu_scale,
+                                   param.activation_param.hard_swish_scale,
+                                   offset,
+                                   threshold);
         }
         /// warm up
         for (int i = 0; i < FLAGS_warmup; ++i) {
@@ -435,7 +459,7 @@ TEST(TestConvRand, test_conv_rand) {
                       for (auto& pad_bottom : {0, 2}) {
                         for (auto& dila : {1, 2}) {
                           for (auto& flag_bias : {false, true}) {
-                            for (auto& flag_act : {0, 1, 2, 4}) {
+                            for (auto& flag_act : {0, 1, 2, 4, 10}) {
                               if (cin % g != 0 || cout % g != 0) {
                                 continue;
                               }
@@ -454,6 +478,11 @@ TEST(TestConvRand, test_conv_rand) {
                               // skip 3x3s1 direct conv
                               if (g == 1 && (cin != 1 || cout != 1) &&
                                   kw == 3 && kh == 3 && stride == 1) {
+                                break;
+                              }
+                              // skip 5x5 depthwise and act_type=10
+                              if (g == cin && cin == cout && kw == 5 &&
+                                  kh == 5 && flag_act == 10) {
                                 break;
                               }
                               const float leakey_relu_scale = 8.88;
@@ -488,6 +517,7 @@ TEST(TestConvRand, test_conv_rand) {
 
 #if 1  /// custom
 TEST(TestConvCustom, test_conv_fp32_custom_size) {
+  LOG(INFO) << "test";
   CHECK_EQ(FLAGS_in_channel % FLAGS_group, 0)
       << "input channel must be divided by group";
   CHECK_EQ(FLAGS_out_channel % FLAGS_group, 0)

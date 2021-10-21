@@ -93,15 +93,11 @@ bool XPUConv2dOp::InferShapeImpl() const {
     const auto branch_dims = param_.branch->dims();
     CHECK_EQ(branch_dims.size(), 4UL)
         << "ConvXPUOp branch should be 4-D tensor.";
-    for (auto i = 0; i < 4; i++) {
-      CHECK_EQ(output_shape[i], branch_dims[i]);
-    }
   }
   return true;
 }
 
 bool XPUConv2dOp::AttachImpl(const cpp::OpDesc& op_desc, lite::Scope* scope) {
-  AttachParam(&param_);
   CHECK(scope->FindVar(op_desc.Input("Input").front()));
   CHECK(scope->FindVar(op_desc.Input("Filter").front()));
   CHECK(scope->FindVar(op_desc.Output("Output").front()));

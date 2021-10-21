@@ -1,4 +1,4 @@
-// Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,33 +30,64 @@ void FetchImageCompute::PrepareForRun() {
     auto& context = ctx_->As<MTLContext>();
     metal_context_ = (MetalContext*)context.context();
 
+    init_memory();
+    setup_without_mps();
+
+    auto backend = (__bridge MetalContextImp*)metal_context_->backend();
+    [backend add_fetch_kernel_ptr:this];
+}
+
+void FetchImageCompute::ReInitWhenNeeded() {
     const auto& param = this->Param<param_t>();
+    auto input_dims = param.input->dims();
+
+    if (last_input_dims_ != input_dims) {
+        init_memory();
+        setup_without_mps();
+    }
+}
+
+void FetchImageCompute::init_memory() {
+    const auto& param = this->Param<param_t>();
+
 #ifdef LITE_WITH_METAL_FULL
 #else
     input_buffer_ = param.input->data<MetalHalf, MetalImage>();
 #endif
 
-    // output
+    // output GPU data
+    auto input_tensor = param.input;
+    auto dims = input_tensor->dims();
+    auto count = (size_t)dims.production();
+    output_buffer_ = make_shared<MetalBuffer>(metal_context_, dims, count * sizeof(float));
+
+    // output CPU data: float, int64
     auto* fetch_list = param.fetch_list;
     if (param.col >= fetch_list->size()) {
         fetch_list->resize(param.col + 1);
     }
     Tensor* output_tensor = &fetch_list->at(param.col);
-    auto count = param.input->dims().production();
-    auto size = count * sizeof(float);
-    auto output_dims = DDimLite({count});
-    output_tensor->Resize(output_dims);
-    auto data = output_tensor->template mutable_data<float>(TARGET(kHost), size);
-    TargetWrapperMetal::MemsetSync(data, 0, size);
-    // output: MTLBuffer(ps: output layout is NCHW)
-    output_buffer_ = make_shared<MetalBuffer>(metal_context_, output_dims, size);
-    auto backend = (__bridge MetalContextImp*)metal_context_->backend();
-    [backend add_fetch_kernel_ptr:this];
-    
-    setup_without_mps();
+    output_tensor->Resize(dims);
+    if (input_tensor->precision() == paddle::lite_api::PrecisionType::kFloat) {
+        auto size = count * sizeof(float);
+        auto data = output_tensor->template mutable_data<float>(TARGET(kHost), size);
+        TargetWrapperMetal::MemsetSync(data, 0, size);
+    } else if (input_tensor->precision() == paddle::lite_api::PrecisionType::kInt64) {
+        auto size = count * sizeof(int64_t);
+        auto data = output_tensor->template mutable_data<int64_t>(TARGET(kHost), size);
+        TargetWrapperMetal::MemsetSync(data, 0, size);
+    }
+
+    last_input_dims_ = dims;
 }
 
 void FetchImageCompute::Run() {
+    @autoreleasepool {
+        run_without_mps();
+    }
+}
+
+void FetchImageCompute::run_without_mps() {
     auto pipline = pipline_;
     auto inTexture = input_buffer_->image();
     auto backend = (__bridge MetalContextImp*)metal_context_->backend();
@@ -70,15 +101,25 @@ void FetchImageCompute::Run() {
     [backend commit];
 }
 
+// fetch wait completed
 void FetchImageCompute::fetch_data_from_gpu() {
-    // fetch wait completed
     const auto& param = this->Param<param_t>();
-    auto* fetch_list = param.fetch_list;
-    Tensor* output_tensor = &fetch_list->at(param.col);
-    auto data = output_tensor->data<float>();
-    auto size = param.input->dims().production();
-    float* buf = (float*)[output_buffer_->buffer() contents];
-    TargetWrapperMetal::MemcpySync((void*)data, (void*)buf, size * sizeof(float));
+
+    auto input_tensor = param.input;
+    auto count = (size_t)input_tensor->dims().production();
+    Tensor* output_tensor = &(param.fetch_list->at(param.col));
+    float* buffer = (float*)[output_buffer_->buffer() contents];
+
+    // output CPU data: float, int64
+    if (input_tensor->precision() == paddle::lite_api::PrecisionType::kFloat) {
+        auto data = output_tensor->data<float>();
+        TargetWrapperMetal::MemcpySync((void*)data, (void*)buffer, (size_t)(count * sizeof(float)));
+    } else if (input_tensor->precision() == paddle::lite_api::PrecisionType::kInt64) {
+        auto data = const_cast<int64_t*>(output_tensor->data<int64_t>());
+        for (int i = 0; i < count; i++) {
+            data[i] = (int64_t)buffer[i];
+        }
+    }
 }
 
 void FetchImageCompute::setup_without_mps() {
@@ -91,16 +132,7 @@ void FetchImageCompute::setup_without_mps() {
     params_buffer_ =
         std::make_shared<MetalBuffer>(metal_context_, sizeof(fetch_params), &fetch_params);
 
-    std::vector<int> transpose_nhwc = {0, 2, 3, 1};
-    std::vector<int> transpose_nchw = {0, 1, 2, 3};
-    if (input_buffer_->transpose_ == transpose_nhwc) {
-        function_name_ = "fetch";
-    } else if (input_buffer_->transpose_ == transpose_nchw) {
-        LOG(FATAL) << "fetch: all transpose should be {0, 2, 3, 1}";
-    } else {
-        LOG(FATAL) << "fetch: unsupported tensor transpose";
-    }
-
+    function_name_ = "fetch";
     // pipline
     auto backend = (__bridge MetalContextImp*)metal_context_->backend();
     pipline_ = [backend pipline:function_name_];
@@ -118,8 +150,6 @@ REGISTER_LITE_KERNEL(fetch,
     paddle::lite::kernels::metal::FetchImageCompute,
     def)
     .BindInput("X",
-        {LiteType::GetTensorTy(TARGET(kMetal),
-            PRECISION(kFloat),
-            DATALAYOUT(kMetalTexture2DArray))})
-    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kNCHW))})
+        {LiteType::GetTensorTy(TARGET(kMetal), PRECISION(kAny), DATALAYOUT(kMetalTexture2DArray))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kAny), DATALAYOUT(kNCHW))})
     .Finalize();

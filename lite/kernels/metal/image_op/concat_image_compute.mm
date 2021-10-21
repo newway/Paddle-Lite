@@ -1,4 +1,4 @@
-// Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -44,6 +44,12 @@ void ConcatImageCompute::PrepareForRun() {
 }
 
 void ConcatImageCompute::Run() {
+    @autoreleasepool {
+        run_without_mps();
+    }
+}
+
+void ConcatImageCompute::run_without_mps() {
     auto pipline = pipline_;
     auto outTexture = output_buffer_->image();
     auto backend = (__bridge MetalContextImp*)metal_context_->backend();
@@ -126,8 +132,7 @@ void ConcatImageCompute::setup_without_mps() {
             odm[4 - orank + i] = (int)(output_buffer_->tensor_dim_[i]);
         }
     }
-    ConcatMetalParam concat_params{
-        {odm[0], odm[1], odm[2], odm[3]},
+    ConcatMetalParam concat_params{{odm[0], odm[1], odm[2], odm[3]},
         static_cast<int>(axis),
         0,
         {transpose[0], transpose[1], transpose[2], transpose[3]},

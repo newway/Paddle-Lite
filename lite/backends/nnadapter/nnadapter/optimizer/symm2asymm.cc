@@ -26,8 +26,8 @@ namespace nnadapter {
 static void ConvertOperandSymmToAsymm(hal::Operand* operand,
                                       int32_t zero_point) {
   switch (operand->type.precision) {
-    case NNADAPTER_TENSOR_QUANT_INT8_SYMM_PER_LAYER: {
-      operand->type.precision = NNADAPTER_TENSOR_QUANT_UINT8_ASYMM_PER_LAYER;
+    case NNADAPTER_QUANT_INT8_SYMM_PER_LAYER: {
+      operand->type.precision = NNADAPTER_QUANT_UINT8_ASYMM_PER_LAYER;
       auto scale = operand->type.symm_per_layer_params.scale;
       operand->type.asymm_per_layer_params = {.scale = scale,
                                               .zero_point = zero_point};
@@ -64,8 +64,8 @@ static void PropagateAsymmZeroPoint(hal::Operand* reference_operand,
   auto& target_type = target_operand->type;
   auto reference_precision = reference_type.precision;
   auto target_precision = target_type.precision;
-  if (IsAsymmPerLayerQuantization(reference_precision) &&
-      IsAsymmPerLayerQuantization(target_precision)) {
+  if (IsAsymmPerLayerQuantType(reference_precision) &&
+      IsAsymmPerLayerQuantType(target_precision)) {
     target_type.asymm_per_layer_params.zero_point =
         reference_type.asymm_per_layer_params.zero_point;
   } else {
@@ -103,6 +103,7 @@ NNADAPTER_EXPORT void ConvertQuantizationSymmToAsymm(hal::Model* model) {
       case NNADAPTER_RELU6:
       case NNADAPTER_RESHAPE:
       case NNADAPTER_TANH:
+      case NNADAPTER_FLATTEN:
       case NNADAPTER_TRANSPOSE:
       case NNADAPTER_HARD_SIGMOID:
       case NNADAPTER_HARD_SWISH: {

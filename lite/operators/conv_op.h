@@ -38,6 +38,7 @@ class ConvOpLite : public OpLite {
 
   bool CheckShape() const override;
   bool InferShapeImpl() const override;
+  bool InferShapeWithCache() const override { return true; }
 
 #ifdef LITE_WITH_PROFILE
   void GetOpRuntimeInfo(paddle::lite::profile::OpCharacter* ch) {
@@ -69,7 +70,6 @@ class ConvOpLite : public OpLite {
 
   // TODO(Superjomn) replace framework::OpDesc with a lite one.
   bool AttachImpl(const cpp::OpDesc& op_desc, lite::Scope* scope) override {
-    AttachParam(&param_);
     auto X = op_desc.Input("Input").front();
     auto Filter = op_desc.Input("Filter").front();
     auto Out = op_desc.Output("Output").front();
@@ -77,6 +77,9 @@ class ConvOpLite : public OpLite {
     param_.x = scope->FindVar(X)->GetMutable<lite::Tensor>();
     param_.filter = scope->FindVar(Filter)->GetMutable<lite::Tensor>();
     param_.output = scope->FindVar(Out)->GetMutable<lite::Tensor>();
+    CHECK(param_.x);
+    CHECK(param_.filter);
+    CHECK(param_.output);
 
     param_.strides = op_desc.GetAttr<std::vector<int>>("strides");
     std::vector<int> paddings = op_desc.GetAttr<std::vector<int>>("paddings");

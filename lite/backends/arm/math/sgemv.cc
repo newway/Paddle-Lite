@@ -11,12 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 #include "lite/backends/arm/math/sgemv.h"
 #include <arm_neon.h>
 #include <algorithm>
 #include <memory>
-#include "lite/utils/cp_logging.h"
+#include "lite/backends/arm/math/funcs.h"
+#include "lite/core/parallel_defines.h"
+#include "lite/utils/log/cp_logging.h"
 
 namespace paddle {
 namespace lite {
@@ -30,8 +31,8 @@ void sgemv(const int M,
            float *y,
            float beta,
            bool flag_bias,
-           bool has_a53,
-           const float *bias);
+           const float *bias,
+           const ARMContext *ctx);
 
 void sgemv_relu(const int M,
                 const int N,
@@ -40,8 +41,8 @@ void sgemv_relu(const int M,
                 float *y,
                 float beta,
                 bool flag_bias,
-                bool has_a53,
-                const float *bias);
+                const float *bias,
+                const ARMContext *ctx);
 
 void sgemv_relu6(const int M,
                  const int N,
@@ -51,7 +52,8 @@ void sgemv_relu6(const int M,
                  float beta,
                  bool flag_bias,
                  const float *bias,
-                 const float six);
+                 const float six,
+                 const ARMContext *ctx);
 
 void sgemv_leakey_relu(const int M,
                        const int N,
@@ -61,7 +63,21 @@ void sgemv_leakey_relu(const int M,
                        float beta,
                        bool flag_bias,
                        const float *bias,
-                       const float alpha);
+                       const float alpha,
+                       const ARMContext *ctx);
+
+void sgemv_hard_swish(const int M,
+                      const int N,
+                      const float *A,
+                      const float *x,
+                      float *y,
+                      float beta,
+                      bool flag_bias,
+                      const float *bias,
+                      const float scale,
+                      const float offset,
+                      const float threshold,
+                      const ARMContext *ctx);
 
 void sgemv_trans(const int M,
                  const int N,
@@ -72,10 +88,8 @@ void sgemv_trans(const int M,
                  bool flag_bias,
                  const float *bias,
                  bool flag_act,
-                 lite_api::ActivationType act,
-                 const ARMContext *ctx,
-                 float six,
-                 float alpha);
+                 const operators::ActivationParam act_param,
+                 const ARMContext *ctx);
 
 bool sgemv(const float *A,
            const float *x,
@@ -86,28 +100,58 @@ bool sgemv(const float *A,
            float beta,
            bool is_bias,
            const float *bias,
-           bool flag_act,
-           lite_api::ActivationType act,
-           const ARMContext *ctx,
-           float six,
-           float alpha) {
-  bool has_a53 = (ctx->arch() == kA53 || ctx->arch() == kA35);
+           const operators::ActivationParam act_param,
+           const ARMContext *ctx) {
+  bool flag_act = act_param.has_active;
+  auto act = act_param.active_type;
   if (transA) {
-    sgemv_trans(
-        M, N, A, x, y, beta, is_bias, bias, flag_act, act, ctx, six, alpha);
+    sgemv_trans(M, N, A, x, y, beta, is_bias, bias, flag_act, act_param, ctx);
   } else {
     if (flag_act) {
       if (act == lite_api::ActivationType::kRelu) {
-        sgemv_relu(M, N, A, x, y, beta, is_bias, has_a53, bias);
+        sgemv_relu(M, N, A, x, y, beta, is_bias, bias, ctx);
       } else if (act == lite_api::ActivationType::kRelu6) {
-        sgemv_relu6(M, N, A, x, y, beta, is_bias, bias, six);
+        sgemv_relu6(M,
+                    N,
+                    A,
+                    x,
+                    y,
+                    beta,
+                    is_bias,
+                    bias,
+                    act_param.Relu_clipped_coef,
+                    ctx);
       } else if (act == lite_api::ActivationType::kLeakyRelu) {
-        sgemv_leakey_relu(M, N, A, x, y, beta, is_bias, bias, alpha);
+        sgemv_leakey_relu(M,
+                          N,
+                          A,
+                          x,
+                          y,
+                          beta,
+                          is_bias,
+                          bias,
+                          act_param.Leaky_relu_alpha,
+                          ctx);
+      } else if (act == lite_api::ActivationType::kHardSwish) {
+        sgemv_hard_swish(M,
+                         N,
+                         A,
+                         x,
+                         y,
+                         beta,
+                         is_bias,
+                         bias,
+                         act_param.hard_swish_scale,
+                         act_param.hard_swish_offset,
+                         act_param.hard_swish_threshold,
+                         ctx);
       } else {
-        LOG(FATAL) << "sgemv only support relu, relu6, leakey relu fusion";
+        LOG(FATAL) << "sgemv only support relu, relu6, leakey relu and "
+                      "hard_swish fusion, act: "
+                   << static_cast<int>(act) << " doesn't support now";
       }
     } else {
-      sgemv(M, N, A, x, y, beta, is_bias, has_a53, bias);
+      sgemv(M, N, A, x, y, beta, is_bias, bias, ctx);
     }
   }
   return true;
@@ -123,16 +167,17 @@ void sgemv_trans(const int M,
                  bool flag_bias,
                  const float *bias,
                  bool flag_act,
-                 lite_api::ActivationType act,
-                 const ARMContext *ctx,
-                 float six,
-                 float alpha) {
+                 const operators::ActivationParam act_param,
+                 const ARMContext *ctx) {
   int m_cnt16 = M >> 4;
   int m_cnt8 = (M & 15) >> 3;
   int m_cnt4 = (M & 15 & 7) >> 2;
   int m_remain = M & 15 & 7 & 3;
   int ths = ctx->threads();
   int valid_ths = std::min((N + 3) / 4, ths);
+  auto act = act_param.active_type;
+  auto six = act_param.Relu_clipped_coef;
+  auto alpha = act_param.Leaky_relu_alpha;
   int valid_block = std::max(4, (N / valid_ths + 3) / 4 * 4);
   valid_ths = (N + valid_block - 1) / valid_block;
   int block_cnt = valid_block / 4;
@@ -160,8 +205,8 @@ void sgemv_trans(const int M,
   } else {
     memset(y_buf, 0, valid_ths * M * sizeof(float));
   }
-#pragma omp parallel for
-  for (int t = 0; t < valid_ths; ++t) {
+
+  LITE_PARALLEL_BEGIN(t, tid, valid_ths) {
     float *block_y = y_buf + t * M;
     const float *block_x = x_buf + t * valid_block;
     const float *block_A = A + t * valid_block * M;
@@ -335,13 +380,13 @@ void sgemv_trans(const int M,
       }
     }
   }
+  LITE_PARALLEL_END();
   int cnt4 = M >> 2;
   int remain = M & 3;
   //! do reduction
   int rdc_ths = valid_ths >> 1;
   while (rdc_ths > 0) {
-#pragma omp parallel for
-    for (int t = 0; t < rdc_ths; ++t) {
+    LITE_PARALLEL_BEGIN(t, tid, rdc_ths) {
       float *y0 = y_buf + t * M;
       for (int i = t + rdc_ths; i < valid_ths; i += rdc_ths) {
         float *y0_ptr = y0;
@@ -359,6 +404,7 @@ void sgemv_trans(const int M,
         }
       }
     }
+    LITE_PARALLEL_END();
     valid_ths = rdc_ths;
     rdc_ths = rdc_ths >> 1;
   }
@@ -431,6 +477,42 @@ void sgemv_trans(const int M,
         for (int r = 0; r < remain; ++r) {
           y[r] = beta * y[r] + (in_y[r] < 0.f ? alpha * in_y[r] : in_y[r]);
         }
+      } else if (act == lite_api::ActivationType::kHardSwish) {
+        float32x4_t vscale = vdupq_n_f32(1.f / act_param.hard_swish_scale);
+        float32x4_t voffset = vdupq_n_f32(act_param.hard_swish_offset);
+        float32x4_t vthreshold = vdupq_n_f32(act_param.hard_swish_threshold);
+        if (cnt4 > 0) {
+          int cnt = cnt4;
+          asm volatile(
+              "1:\n"
+              "ld1   {v0.4s},  [%[in_y]],   #16 \n"
+              "fadd  v4.4s,  v0.4s,  %[voffset].4s \n"
+              "fmul  v5.4s,  v0.4s,  %[vscale].4s \n"
+              "fmax  v1.4s,  v4.4s,  %[vzero].4s\n"
+              "fmin  v1.4s,  v1.4s,  %[vthreshold].4s\n"
+              "fmul  v0.4s, v5.4s, v1.4s\n"
+              "fadd  v0.4s, v0.4s, %[vbeta].4s \n"
+              "subs  %w[cnt],  %w[cnt], #1      \n" /*      sub cnt     */
+              "st1   {v0.4s},  [%[out_y]], #16  \n" /*  store v0 to y   */
+              "bne   1b                         \n" /* branch to label 1*/
+              : [cnt] "+r"(cnt), [in_y] "+r"(in_y), [out_y] "+r"(y)
+              : [vzero] "w"(vzero),
+                [vscale] "w"(vscale),
+                [vbeta] "w"(vbeta),
+                [voffset] "w"(voffset),
+                [vthreshold] "w"(vthreshold)
+              : "v0", "v1", "v4", "v5", "cc", "memory");
+        }
+        for (int r = 0; r < remain; ++r) {
+          auto tmp =
+              std::min(std::max(0.f, in_y[r] + act_param.hard_swish_offset),
+                       act_param.hard_swish_threshold) *
+              in_y[r] / act_param.hard_swish_scale;
+          y[r] = beta * y[r] + tmp;
+        }
+      } else {
+        LOG(FATAL) << "This act : " << static_cast<int>(act)
+                   << " doesn't support";
       }
     } else {
       for (int i = 0; i < M; i++) {
@@ -502,6 +584,38 @@ void sgemv_trans(const int M,
         for (int r = 0; r < remain; ++r) {
           y[r] = in_y[r] < 0.f ? alpha * in_y[r] : in_y[r];
         }
+      } else if (act == lite_api::ActivationType::kHardSwish) {
+        float32x4_t vscale = vdupq_n_f32(1.f / act_param.hard_swish_scale);
+        float32x4_t voffset = vdupq_n_f32(act_param.hard_swish_offset);
+        float32x4_t vthreshold = vdupq_n_f32(act_param.hard_swish_threshold);
+        if (cnt4 > 0) {
+          int cnt = cnt4;
+          asm volatile(
+              "1:\n"
+              "ld1   {v0.4s},  [%[in_y]],   #16 \n"
+              "fadd  v4.4s,  v0.4s,  %[voffset].4s \n"
+              "fmul  v5.4s,  v0.4s,  %[vscale].4s \n"
+              "fmax  v1.4s,  v4.4s,  %[vzero].4s\n"
+              "fmin  v1.4s,  v1.4s,  %[vthreshold].4s\n"
+              "fmul  v0.4s, v5.4s, v1.4s\n"
+              "subs  %w[cnt],  %w[cnt], #1      \n" /*      sub cnt     */
+              "st1   {v0.4s},  [%[out_y]], #16  \n" /*  store v0 to y   */
+              "bne   1b                         \n" /* branch to label 1*/
+              : [cnt] "+r"(cnt), [in_y] "+r"(in_y), [out_y] "+r"(y)
+              : [vzero] "w"(vzero),
+                [vscale] "w"(vscale),
+                [voffset] "w"(voffset),
+                [vthreshold] "w"(vthreshold)
+              : "v0", "v1", "v4", "v5", "cc", "memory");
+        }
+        for (int r = 0; r < remain; ++r) {
+          y[r] = std::min(std::max(0.f, in_y[r] + act_param.hard_swish_offset),
+                          act_param.hard_swish_threshold) *
+                 in_y[r] / act_param.hard_swish_scale;
+        }
+      } else {
+        LOG(FATAL) << "This act : " << static_cast<int>(act)
+                   << " doesn't support";
       }
     } else {
       memcpy(y, y_buf, M * sizeof(float));
@@ -518,15 +632,16 @@ void sgemv_trans(const int M,
                  bool flag_bias,
                  const float *bias,
                  bool flag_act,
-                 lite_api::ActivationType act,
-                 const ARMContext *ctx,
-                 float six,
-                 float alpha) {
+                 const operators::ActivationParam act_param,
+                 const ARMContext *ctx) {
   int m_cnt8 = M >> 3;
   int m_cnt4 = (M & 7) >> 2;
   int m_remain = M & 7 & 3;
   int ths = ctx->threads();
   int valid_ths = std::min((N + 3) / 4, ths);
+  auto act = act_param.active_type;
+  auto six = act_param.Relu_clipped_coef;
+  auto alpha = act_param.Leaky_relu_alpha;
   int valid_block = std::max(4, (N / valid_ths + 3) / 4 * 4);
   valid_ths = (N + valid_block - 1) / valid_block;
   int block_cnt = valid_block / 4;
@@ -540,8 +655,7 @@ void sgemv_trans(const int M,
   } else {
     memset(y_buf, 0, valid_ths * M * sizeof(float));
   }
-#pragma omp parallel for
-  for (int t = 0; t < valid_ths; ++t) {
+  LITE_PARALLEL_BEGIN(t, tid, valid_ths) {
     float *block_y = y_buf + t * M;
     const float *block_x = x + t * valid_block;
     const float *block_A = A + t * valid_block * M;
@@ -667,11 +781,11 @@ void sgemv_trans(const int M,
       }
     }
   }
+  LITE_PARALLEL_END();
   //! do reduction
   int rdc_ths = valid_ths >> 1;
   while (rdc_ths > 0) {
-#pragma omp parallel for
-    for (int t = 0; t < rdc_ths; ++t) {
+    LITE_PARALLEL_BEGIN(t, tid, rdc_ths) {
       float *y0 = y_buf + t * M;
       for (int i = t + rdc_ths; i < valid_ths; i += rdc_ths) {
         float *y0_ptr = y0;
@@ -701,6 +815,7 @@ void sgemv_trans(const int M,
         }
       }
     }
+    LITE_PARALLEL_END();
     valid_ths = rdc_ths;
     rdc_ths = rdc_ths >> 1;
   }
@@ -776,6 +891,42 @@ void sgemv_trans(const int M,
         for (int r = 0; r < m_remain; ++r) {
           y[r] = beta * y[r] + (in_y[r] < 0.f ? alpha * in_y[r] : in_y[r]);
         }
+      } else if (act == lite_api::ActivationType::kHardSwish) {
+        float32x4_t vscale = vdupq_n_f32(1.f / act_param.hard_swish_scale);
+        float32x4_t voffset = vdupq_n_f32(act_param.hard_swish_offset);
+        float32x4_t vthreshold = vdupq_n_f32(act_param.hard_swish_threshold);
+        if (m_cnt4 > 0) {
+          int cnt4 = m_cnt4;
+          asm volatile(
+              "1:\n"
+              "vld1.32  {d0-d1}, [%[in_y]]!   \n"
+              "vadd.f32 q3, q0,  %q[voffset]  \n"
+              "vmul.f32 q4, q0,  %q[vscale]   \n"
+              "vmax.f32 q5, q3,  %q[vzero]    \n"
+              "vmin.f32 q5, q5,  %q[vthreshold]\n"
+              "vmul.f32 q0, q5, q4            \n"
+              "vadd.f32 q0, q0, %q[vbeta]     \n"
+              "subs %[cnt], %[cnt], #1        \n"
+              "vst1.32  {d0-d1}, [%[out_y]]!  \n"
+              "bne  1b                        \n"
+              : [cnt] "+r"(cnt4), [in_y] "+r"(in_y), [out_y] "+r"(y)
+              : [vzero] "w"(vzero),
+                [vscale] "w"(vscale),
+                [vbeta] "w"(vbeta),
+                [voffset] "w"(voffset),
+                [vthreshold] "w"(vthreshold)
+              : "q0", "q3", "q4", "q5", "cc", "memory");
+        }
+        for (int r = 0; r < m_remain; ++r) {
+          auto tmp =
+              std::min(std::max(0.f, in_y[r] + act_param.hard_swish_offset),
+                       act_param.hard_swish_threshold) *
+              in_y[r] / act_param.hard_swish_scale;
+          y[r] = beta * y[r] + tmp;
+        }
+      } else {
+        LOG(FATAL) << "This act : " << static_cast<int>(act)
+                   << " doesn't support";
       }
     } else {
       for (int i = 0; i < M; i++) {
@@ -849,6 +1000,38 @@ void sgemv_trans(const int M,
         for (int r = 0; r < m_remain; ++r) {
           y[r] = in_y[r] < 0.f ? alpha * in_y[r] : in_y[r];
         }
+      } else if (act == lite_api::ActivationType::kHardSwish) {
+        float32x4_t vscale = vdupq_n_f32(1.f / act_param.hard_swish_scale);
+        float32x4_t voffset = vdupq_n_f32(act_param.hard_swish_offset);
+        float32x4_t vthreshold = vdupq_n_f32(act_param.hard_swish_threshold);
+        if (m_cnt4 > 0) {
+          int cnt4 = m_cnt4;
+          asm volatile(
+              "1:\n"
+              "vld1.32  {d0-d1}, [%[in_y]]!   \n"
+              "vadd.f32 q3, q0,  %q[voffset]  \n"
+              "vmul.f32 q4, q0,  %q[vscale]   \n"
+              "vmax.f32 q5, q3,  %q[vzero]    \n"
+              "vmin.f32 q5, q5,  %q[vthreshold]\n"
+              "vmul.f32 q0, q5, q4            \n"
+              "subs %[cnt], %[cnt], #1        \n"
+              "vst1.32  {d0-d1}, [%[out_y]]!  \n"
+              "bne  1b                        \n"
+              : [cnt] "+r"(cnt4), [in_y] "+r"(in_y), [out_y] "+r"(y)
+              : [vzero] "w"(vzero),
+                [vscale] "w"(vscale),
+                [voffset] "w"(voffset),
+                [vthreshold] "w"(vthreshold)
+              : "q0", "q3", "q4", "q5", "cc", "memory");
+        }
+        for (int r = 0; r < m_remain; ++r) {
+          y[r] = std::min(std::max(0.f, in_y[r] + act_param.hard_swish_offset),
+                          act_param.hard_swish_threshold) *
+                 in_y[r] / act_param.hard_swish_scale;
+        }
+      } else {
+        LOG(FATAL) << "This act : " << static_cast<int>(act)
+                   << " doesn't support";
       }
     } else {
       memcpy(y, y_buf, M * sizeof(float));
@@ -860,25 +1043,6 @@ void sgemv_trans(const int M,
 // clang-format off
 //! define compute kernel
 #ifdef __aarch64__
-#define SGEMV_IN_8                                    \
-  "prfm  pldl1keep, [%[in]]   \n" /* preload din */   \
-  "prfm  pldl1keep, [%[w0]]   \n" /* preload w0 */    \
-  "prfm  pldl1keep, [%[w1]]   \n" /* preload w1 */    \
-  "prfm  pldl1keep, [%[w2]]   \n" /* preload w2 */    \
-  "prfm  pldl1keep, [%[w3]]   \n" /* preload w3 */    \
-  "prfm  pldl1keep, [%[w4]]   \n" /* preload w4 */    \
-  "prfm  pldl1keep, [%[w5]]   \n" /* preload w5 */    \
-  "prfm  pldl1keep, [%[w6]]   \n" /* preload w6 */    \
-  "prfm  pldl1keep, [%[w7]]   \n" /* preload w7 */    \
-  "movi   v0.4s,  #0          \n" /* set out0 to 0 */ \
-  "movi   v1.4s,  #0          \n" /* set out1 to 0 */ \
-  "movi   v2.4s,  #0          \n" /* set out2 to 0 */ \
-  "movi   v3.4s,  #0          \n" /* set out3 to 0 */ \
-  "movi   v4.4s,  #0          \n" /* set out4 to 0 */ \
-  "movi   v5.4s,  #0          \n" /* set out5 to 0 */ \
-  "movi   v6.4s,  #0          \n" /* set out6 to 0 */ \
-  "movi   v7.4s,  #0          \n" /* set out7 to 0 */
-
 #define SGEMV_IN_8_BIAS                                    \
   "ldp   q8, q9, [%[bias_ptr]]\n" /* load bias to q8, q9*/ \
   "prfm  pldl1keep, [%[in]]   \n" /* preload din */        \
@@ -906,12 +1070,6 @@ void sgemv_trans(const int M,
   "ins    v5.s[0], v9.s[1]    \n" /* out5 = bias5 */       \
   "ins    v6.s[0], v9.s[2]    \n" /* out6 = bias6 */       \
   "ins    v7.s[0], v9.s[3]    \n" /* out7 = bias7 */
-
-#define SGEMV_IN_1                                    \
-  "prfm  pldl1keep, [%[in]]   \n" /* preload din */   \
-  "prfm  pldl1keep, [%[w0]]   \n" /* preload w0 */    \
-  "movi   v0.4s,  #0          \n" /* set out0 to 0 */ \
-  "movi   v1.4s,  #0          \n" /* set out0 to 0 */
 
 #define SGEMV_IN_1_BIAS                               \
   "prfm  pldl1keep, [%[in]]   \n" /* preload din */   \
@@ -974,12 +1132,12 @@ void sgemv_trans(const int M,
   "faddp  v22.4s, v6.4s, v6.4s\n"  /* pair add to vector */                    \
   "faddp  s10, v18.2s         \n"  /* pair add to scale */                     \
   "faddp  v23.4s, v7.4s, v7.4s\n"  /* pair add to vector */                    \
+  "cmp %w[tail], #1           \n"  /* check whether has tail */                \
   "faddp  s11, v19.2s         \n"  /* pair add to scale */                     \
   "faddp  s12, v20.2s         \n"  /* pair add to scale */                     \
   "faddp  s13, v21.2s         \n"  /* pair add to scale */                     \
   "faddp  s14, v22.2s          \n" /* pair add to scale */                     \
   "faddp  s15, v23.2s          \n" /* pair add to scale */                     \
-  "cmp %w[tail], #1           \n"  /* check whether has tail */                \
   "blt  4f                    \n"  /* jump to end */                           \
   "3:                         \n"  /* tail loop */                             \
   "ldr     s16, [%[in]], #4   \n"  /* load in, 1 float */                      \
@@ -995,12 +1153,85 @@ void sgemv_trans(const int M,
   "ldr     s23, [%[w6]], #4   \n"  /* load w6, 1 float */                      \
   "fmadd   s11, s16, s20, s11 \n"  /* mul + add */                             \
   "ldr     s24, [%[w7]], #4   \n"  /* load w7, 1 float */                      \
+  "subs %w[tail], %w[tail], #1\n"  /* sub tail loop count */                   \
   "fmadd   s12, s16, s21, s12 \n"  /* mul + add */                             \
   "fmadd   s13, s16, s22, s13 \n"  /* mul + add */                             \
   "fmadd   s14, s16, s23, s14 \n"  /* mul + add */                             \
   "fmadd   s15, s16, s24, s15 \n"  /* mul + add */                             \
-  "subs %w[tail], %w[tail], #1\n"  /* sub tail loop count */                   \
   "bne 3b                     \n"  /* jump to tail loop */
+
+#define SGEMV_KERNEL_8_A35                                                     \
+  /* check main loop */                                                        \
+  "cmp %w[cnt], #1            \n"\
+  "blt  2f                    \n"\
+  "1:                         \n"\
+  "ldr d8, [%[in]], #8        \n"\
+  "ldr d10, [%[w0]], #8       \n"\
+  "ldr d12, [%[w1]], #8       \n"\
+  "ldr d14, [%[w2]], #8       \n"\
+  "ldr d16, [%[w3]], #8       \n"\
+  "ldr d18, [%[w4]], #8       \n"\
+  "fmla v0.2s, v8.2s, v10.2s  \n"\
+  "ldr d20, [%[w5]], #8       \n"\
+  "fmla v1.2s, v8.2s, v12.2s  \n"\
+  "ldr d22, [%[w6]], #8       \n"\
+  "fmla v2.2s, v8.2s, v14.2s  \n"\
+  "ldr d24, [%[w7]], #8       \n"\
+  "fmla v3.2s, v8.2s, v16.2s  \n"\
+  "ldr d9, [%[in]], #8        \n"\
+  "fmla v4.2s, v8.2s, v18.2s  \n"\
+  "ldr d11, [%[w0]], #8       \n"\
+  "fmla v5.2s, v8.2s, v20.2s  \n"\
+  "ldr d13, [%[w1]], #8       \n"\
+  "fmla v6.2s, v8.2s, v22.2s  \n"\
+  "ldr d15, [%[w2]], #8       \n"\
+  "fmla v7.2s, v8.2s, v24.2s  \n"\
+  "ldr d17, [%[w3]], #8       \n"\
+  "fmla v0.2s, v9.2s, v11.2s  \n"\
+  "ldr d19, [%[w4]], #8       \n"\
+  "fmla v1.2s, v9.2s, v13.2s  \n"\
+  "ldr d21, [%[w5]], #8       \n"\
+  "fmla v2.2s, v9.2s, v15.2s  \n"\
+  "ldr d23, [%[w6]], #8       \n"\
+  "fmla v3.2s, v9.2s, v17.2s  \n"\
+  "subs %w[cnt], %w[cnt], #1  \n"\
+  "ldr d25, [%[w7]], #8       \n"\
+  "fmla v4.2s, v9.2s, v19.2s  \n"\
+  "fmla v5.2s, v9.2s, v21.2s  \n"\
+  "fmla v6.2s, v9.2s, v23.2s  \n"\
+  "fmla v7.2s, v9.2s, v25.2s  \n"\
+  "bne 1b                     \n"\
+  "2:                         \n"\
+  "cmp %w[tail], #1           \n"\
+  "faddp  s8, v0.2s           \n"\
+  "faddp  s9, v1.2s           \n"\
+  "faddp  s10, v2.2s          \n"\
+  "faddp  s11, v3.2s          \n"\
+  "faddp  s12, v4.2s          \n"\
+  "faddp  s13, v5.2s          \n"\
+  "faddp  s14, v6.2s          \n"\
+  "faddp  s15, v7.2s          \n"\
+  "blt  4f                    \n"\
+  "3:                         \n"\
+  "ldr s16, [%[in]], #4       \n"\
+  "ldr s17, [%[w0]], #4       \n"\
+  "ldr s18, [%[w1]], #4       \n"\
+  "ldr s19, [%[w2]], #4       \n"\
+  "ldr s20, [%[w3]], #4       \n"\
+  "ldr s21, [%[w4]], #4       \n"\
+  "fmadd  s8, s16, s17, s8    \n"\
+  "ldr s22, [%[w5]], #4       \n"\
+  "fmadd  s9, s16, s18, s9    \n"\
+  "ldr s23, [%[w6]], #4       \n"\
+  "fmadd  s10, s16, s19, s10  \n"\
+  "ldr s24, [%[w7]], #4       \n"\
+  "fmadd  s11, s16, s20, s11  \n"\
+  "subs %w[tail], %w[tail], #1\n"\
+  "fmadd  s12, s16, s21, s12  \n"\
+  "fmadd  s13, s16, s22, s13  \n"\
+  "fmadd  s14, s16, s23, s14  \n"\
+  "fmadd  s15, s16, s24, s15  \n"\
+  "bne    3b                  \n"
 
 #define SGEMV_KERNEL_8                                                         \
   /* check main loop */                                                        \
@@ -1048,11 +1279,11 @@ void sgemv_trans(const int M,
   "faddp  s10, v18.2s         \n"  /* pair add to scale */                     \
   "faddp  v23.4s, v7.4s, v7.4s\n"  /* pair add to vector */                    \
   "faddp  s11, v19.2s         \n"  /* pair add to scale */                     \
+  "cmp %w[tail], #1           \n"  /* check whether has tail */                \
   "faddp  s12, v20.2s         \n"  /* pair add to scale */                     \
   "faddp  s13, v21.2s         \n"  /* pair add to scale */                     \
   "faddp  s14, v22.2s          \n" /* pair add to scale */                     \
   "faddp  s15, v23.2s          \n" /* pair add to scale */                     \
-  "cmp %w[tail], #1           \n"  /* check whether has tail */                \
   "blt  4f                    \n"  /* jump to end */                           \
   "3:                         \n"  /* tail loop */                             \
   "ldr     s16, [%[in]], #4   \n"  /* load in, 1 float */                      \
@@ -1068,11 +1299,11 @@ void sgemv_trans(const int M,
   "ldr     s23, [%[w6]], #4   \n"  /* load w6, 1 float */                      \
   "fmadd   s11, s16, s20, s11 \n"  /* mul + add */                             \
   "ldr     s24, [%[w7]], #4   \n"  /* load w7, 1 float */                      \
+  "subs %w[tail], %w[tail], #1\n"  /* sub tail loop count */                   \
   "fmadd   s12, s16, s21, s12 \n"  /* mul + add */                             \
   "fmadd   s13, s16, s22, s13 \n"  /* mul + add */                             \
   "fmadd   s14, s16, s23, s14 \n"  /* mul + add */                             \
   "fmadd   s15, s16, s24, s15 \n"  /* mul + add */                             \
-  "subs %w[tail], %w[tail], #1\n"  /* sub tail loop count */                   \
   "bne 3b                     \n"  /* jump to tail loop */
 
 #define SGEMV_KERNEL_1_A53                                                     \
@@ -1086,25 +1317,52 @@ void sgemv_trans(const int M,
   "ldr d11, [%[w0]], #8       \n" /* load input 2 float */                     \
   "ldr x20, [%[in]], #8       \n" /* load input 2 float */                     \
   "fmla v0.4s, v8.4s, v10.4s  \n" /* mul + add*/                               \
+  "subs %w[cnt], %w[cnt], #1  \n" /* sub main loop count */                    \
   "ins v9.d[1], x20           \n" /* load input 4 float */                     \
   "ldr x20, [%[w0]], #8       \n" /* load input 2 float */                     \
   "ins v11.d[1], x20          \n" /* load input 4 float */                     \
-  "subs %w[cnt], %w[cnt], #1  \n" /* sub main loop count */                    \
   "fmla v1.4s, v9.4s, v11.4s  \n" /* mul + add*/                               \
   "bne 1b                     \n" /* jump to main loop */                      \
   /* pair add to final result */                                               \
   "2:                         \n" /* reduce to scale */                        \
+  "cmp %w[tail], #1           \n" /* check whether has tail */                 \
   "fadd   v9.4s, v0.4s, v1.4s \n" /* add 2 vector */                           \
   "faddp  v10.4s, v9.4s, v9.4s\n" /* pair add to vector */                     \
-  "cmp %w[tail], #1           \n" /* check whether has tail */                 \
   "faddp  s8, v10.2s          \n" /* pair add to scale */                      \
   "blt  4f                    \n" /* jump to end */                            \
   "3:                         \n" /* tail loop */                              \
   "ldr     s16, [%[in]], #4   \n" /* load in, 1 float */                       \
   "ldr     s17, [%[w0]], #4   \n" /* load w0, 1 float */                       \
-  "fmadd   s8, s16, s17, s8   \n" /* mul + add */                              \
   "subs %w[tail], %w[tail], #1\n" /* sub tail loop count */                    \
+  "fmadd   s8, s16, s17, s8   \n" /* mul + add */                              \
   "bne 3b                     \n" /* jump to tail loop */
+
+#define SGEMV_KERNEL_1_A35                                                     \
+  /* check main loop */                                                        \
+  "cmp %w[cnt], #1            \n"\
+  "blt  2f                    \n"\
+  "1:                         \n"\
+  "ldr d8,  [%[in], #0]       \n"\
+  "ldr d10, [%[w0], #0]       \n"\
+  "ldr d9,  [%[in], #8]       \n"\
+  "ldr d11, [%[w0], #8]       \n"\
+  "subs %w[cnt], %w[cnt], #1  \n"\
+  "add  %[in], %[in], #0x10   \n"\
+  "add  %[w0], %[w0], #0x10   \n"\
+  "fmla v0.2s, v8.2s, v10.2s  \n"\
+  "fmla v1.2s, v9.2s, v11.2s  \n"\
+  "bne  1b                    \n"\
+  "2:                         \n"\
+  "fadd  v9.2s, v0.2s, v1.2s  \n"\
+  "cmp %w[tail], #1           \n"\
+  "faddp s8, v9.2s            \n"\
+  "blt  4f                    \n"\
+  "3:                         \n"\
+  "ldr s16, [%[in]], #4       \n"\
+  "ldr s17, [%[w0]], #4       \n"\
+  "subs %w[tail], %w[tail], #1\n"\
+  "fmadd  s8, s16, s17, s8    \n"\
+  "bne    3b                  \n"
 
 #define SGEMV_KERNEL_1                                                         \
   /* check main loop */                                                        \
@@ -1113,22 +1371,22 @@ void sgemv_trans(const int M,
   "1:                         \n" /* main loop */                              \
   "ldp q8, q9, [%[in]], #32   \n" /* load input 8 float */                     \
   "ldp q10, q11, [%[w0]], #32 \n" /* load w0 8 float */                        \
-  "fmla v0.4s, v8.4s, v10.4s  \n" /* mul + add*/                               \
   "subs %w[cnt], %w[cnt], #1  \n" /* sub main loop count */                    \
+  "fmla v0.4s, v8.4s, v10.4s  \n" /* mul + add*/                               \
   "fmla v1.4s, v9.4s, v11.4s  \n" /* mul + add*/                               \
   "bne 1b                     \n" /* jump to main loop */                      \
   /* pair add to final result */                                               \
   "2:                         \n" /* reduce to scale */                        \
   "fadd   v9.4s, v0.4s, v1.4s \n" /* add 2 vector */                           \
   "faddp  v10.4s, v9.4s, v9.4s\n" /* pair add to vector */                     \
-  "faddp  s8, v10.2s          \n" /* pair add to scale */                      \
   "cmp %w[tail], #1           \n" /* check whether has tail */                 \
+  "faddp  s8, v10.2s          \n" /* pair add to scale */                      \
   "blt  4f                    \n" /* jump to end */                            \
   "3:                         \n" /* tail loop */                              \
   "ldr     s16, [%[in]], #4   \n" /* load in, 1 float */                       \
   "ldr     s17, [%[w0]], #4   \n" /* load w0, 1 float */                       \
-  "fmadd   s8, s16, s17, s8   \n" /* mul + add */                              \
   "subs %w[tail], %w[tail], #1\n" /* sub tail loop count */                    \
+  "fmadd   s8, s16, s17, s8   \n" /* mul + add */                              \
   "bne 3b                     \n" /* jump to tail loop */
 
 #define SGEMV_OUT_8                                      \
@@ -1194,6 +1452,29 @@ void sgemv_trans(const int M,
   "bif v9.16b, v7.16b, v6.16b       \n" /* choose*/                     \
   "stp q8, q9, [%[out]]             \n" /* save result */
 
+#define SGEMV_OUT_8_HARD_SWISH                                          \
+  /* end */                                                             \
+  "4:                               \n" /* end */                       \
+  "mov v8.s[1], v9.s[0]             \n" /* ins s9 to  v8[1]*/           \
+  "mov v8.s[2], v10.s[0]            \n" /* ins s10 to v8[2]*/           \
+  "mov v8.s[3], v11.s[0]            \n" /* ins s11 to v8[3]*/           \
+  "mov v9.s[0], v12.s[0]            \n" /* ins s12 to v9[0]*/           \
+  "mov v9.s[1], v13.s[0]            \n" /* ins s13 to v9[1]*/           \
+  "mov v9.s[2], v14.s[0]            \n" /* ins s14 to v9[2]*/           \
+  "mov v9.s[3], v15.s[0]            \n" /* ins s15 to v9[3]*/           \
+  "movi   v2.4s, #0                 \n" /* zero data for hard_swish */  \
+  "fadd v4.4s, v8.4s,  %[voffset].4s\n" /* vadd_f32 */                  \
+  "fadd v6.4s, v9.4s,  %[voffset].4s\n" /* vadd_f32 */                  \
+  "fmul v5.4s, v8.4s,  %[vscale].4s \n" /* vmulq_f32 */                 \
+  "fmul v7.4s, v9.4s,  %[vscale].4s \n" /* vmulq_f32 */                 \
+  "fmax v4.4s, v4.4s,  v2.4s        \n"                                 \
+  "fmax v6.4s, v6.4s,  v2.4s        \n"                                 \
+  "fmin v4.4s, v4.4s,  %[vthreshold].4s\n"                              \
+  "fmin v6.4s, v6.4s,  %[vthreshold].4s\n"                              \
+  "fmul v8.4s, v4.4s, v5.4s         \n"                                 \
+  "fmul v9.4s, v6.4s, v7.4s         \n"                                 \
+  "stp q8, q9, [%[out]]             \n" /* save result */
+
 #define SGEMV_OUT_1                                 \
   /* end */                                         \
   "4:                         \n" /* end */         \
@@ -1223,6 +1504,20 @@ void sgemv_trans(const int M,
   "bge    5f                    \n" /* if ge zero */        \
   "fmul   s8, s8, s1            \n" /* out * alpha */       \
   "5:                           \n" /* leakey relu label */ \
+  "str s8, [%[out]]             \n" /* save result */
+
+#define SGEMV_OUT_1_HARD_SWISH                              \
+  /* end */                                                 \
+  "4:                           \n" /* end */               \
+  "fmov   s2, %w[offset]        \n"                         \
+  "fmov   s1, %w[scale]         \n" /* mov alpha to s1  */  \
+  "movi   d6, #0                \n"                         \
+  "fmov   s3, %w[threshold]     \n"                         \
+  "fadd   s4, s8, s2            \n"                         \
+  "fmul   s5, s8, s1            \n"                         \
+  "fmax   s4, s4, s6            \n" /* cmp with zero*/      \
+  "fmin   s4, s4, s3            \n"                         \
+  "fmul   s8, s4, s5            \n"                         \
   "str s8, [%[out]]             \n" /* save result */
 
 #define SGEMV_OUT_8_BETA                                 \
@@ -1300,6 +1595,32 @@ void sgemv_trans(const int M,
   "fmla v9.4s, v1.4s, %[vbeta].4s\n"                                   \
   "stp q8, q9, [%[out]]             \n" /* save result */
 
+#define SGEMV_OUT_8_HARD_SWISH_BETA                                     \
+  /* end */                                                             \
+  "4:                               \n" /* end */                       \
+  "mov v8.s[1], v9.s[0]             \n" /* ins s9 to  v8[1]*/           \
+  "ldp q0, q1, [%[out]]        \n"                                      \
+  "mov v8.s[2], v10.s[0]            \n" /* ins s10 to v8[2]*/           \
+  "mov v8.s[3], v11.s[0]            \n" /* ins s11 to v8[3]*/           \
+  "mov v9.s[0], v12.s[0]            \n" /* ins s12 to v9[0]*/           \
+  "mov v9.s[1], v13.s[0]            \n" /* ins s13 to v9[1]*/           \
+  "mov v9.s[2], v14.s[0]            \n" /* ins s14 to v9[2]*/           \
+  "mov v9.s[3], v15.s[0]            \n" /* ins s15 to v9[3]*/           \
+  "movi   v2.4s, #0                 \n" /* zero data for hardswish */   \
+  "fadd v4.4s, v8.4s,  %[voffset].4s\n" /* vaddq_f32 */                 \
+  "fadd v6.4s, v9.4s,  %[voffset].4s\n" /* vaddq_f32 */                 \
+  "fmul v5.4s, v8.4s,  %[vscale].4s \n" /* vmulq_f32 */                 \
+  "fmul v7.4s, v9.4s,  %[vscale].4s \n" /* vmulq_f32 */                 \
+  "fmax v4.4s, v4.4s,  v2.4s        \n"                                 \
+  "fmax v6.4s, v6.4s,  v2.4s        \n"                                 \
+  "fmin v4.4s, v4.4s,  %[vthreshold].4s\n"                              \
+  "fmin v6.4s, v6.4s,  %[vthreshold].4s\n"                              \
+  "fmul v8.4s, v4.4s, v5.4s          \n"                                \
+  "fmul v9.4s, v6.4s, v7.4s          \n"                                \
+  "fmla v8.4s, v0.4s, %[vbeta].4s    \n"                                \
+  "fmla v9.4s, v1.4s, %[vbeta].4s    \n"                                \
+  "stp q8, q9, [%[out]]             \n" /* save result */
+
 #define SGEMV_OUT_1_BETA                            \
   /* end */                                         \
   "4:                         \n" /* end */         \
@@ -1346,6 +1667,24 @@ void sgemv_trans(const int M,
   "fmul s4, s4, s5            \n"                           \
   "fadd s8, s8, s4            \n"                           \
   "str s8, [%[out]]             \n" /* save result */
+
+#define SGEMV_OUT_1_HARD_SWISH_BETA                         \
+  /* end */                                                 \
+  "4:                           \n" /* end */               \
+  "fmov   s2, %w[offset]        \n"                         \
+  "fmov   s1, %w[scale]         \n" /* mov alpha to s1  */  \
+  "movi   d9, #0                \n"                         \
+  "fmov   s3, %w[threshold]     \n"                         \
+  "ldr    s6, [%[out]]          \n"                         \
+  "fmov   s7, %w[beta]          \n"                         \
+  "fadd   s4, s8, s2            \n"                         \
+  "fmul   s5, s8, s1            \n"                         \
+  "fmax   s4, s4, s9            \n" /* cmp with zero*/      \
+  "fmin   s4, s4, s3            \n"                         \
+  "fmul   s8, s4, s5            \n"                         \
+  "fmul   s2, s6, s7            \n"                         \
+  "fadd   s8, s8, s2            \n"                         \
+  "str s8, [%[out]]             \n" /* save result */
 #else  // __aarch64__
 
 #define SGEMV_IN_4                                                    \
@@ -1381,11 +1720,6 @@ void sgemv_trans(const int M,
   "pld [%[w1], #64]               @ preload cache line, weights r1\n" \
   "pld [%[w2], #64]               @ preload cache line, weights r2\n" \
   "pld [%[w3], #64]               @ preload cache line, weights r3\n"
-
-#define SGEMV_IN_1                                                        \
-  "pld [%[in]]                        @ preload cache line, input\n"      \
-  "pld [%[w0]]                        @ preload cache line, weights r0\n" \
-  "vmov.u32 q0, #0                    @ set q0 to 0\n"
 
 #define SGEMV_IN_1_BIAS                                                   \
   "pld [%[in]]                        @ preload cache line, input\n"      \
@@ -1490,6 +1824,20 @@ void sgemv_trans(const int M,
   "vbif q0,   q4, q3              @ choose \n"               \
   "vst1.32 {d0-d1}, [%[out]]      @ save result\n"
 
+#define SGEMV_OUT_4_HARD_SWISH                               \
+  /* end */                                                  \
+  "4:                             @ end\n"                   \
+  "vld1.32    {d4-d7}, [%[scale_v]]! @ offset \n"            \
+  "vmov.i32   q1, #0              @ zero for hardswish\n"    \
+  "vld1.32    {d8-d9}, [%[scale_v]]  @ threshold \n"         \
+  "sub        %[scale_v], #32     \n"                        \
+  "vadd.f32   q5, q0, q2          @ vaddq_f32 \n"            \
+  "vmul.f32   q6, q0, q3          @ vmulq_f32 \n"            \
+  "vmax.f32   q5, q5, q1          \n"                        \
+  "vmin.f32   q5, q5, q4          \n"                        \
+  "vmul.f32   q0, q5, q6          \n"                        \
+  "vst1.32 {d0-d1}, [%[out]]      @ save result\n"
+
 #define SGEMV_OUT_1                        \
   /* end */                                \
   "4:                             @ end\n" \
@@ -1519,6 +1867,20 @@ void sgemv_trans(const int M,
   "vcge.f32   d6, d0, d2            @ vcgeq_f32 \n"            \
   "vmul.f32   d8, d0, d3            @ vmulq_f32 \n"            \
   "vbif d0,   d8, d6                @ choose \n"               \
+  "vst1.32 {d0[0]}, [%[out]]        @ save result\n"
+
+#define SGEMV_OUT_1_HARD_SWISH                                 \
+  /* end */                                                    \
+  "4:                               @ end\n"                   \
+  "vdup.f32   d3, %[offset]         @ alpha for leakey relu\n" \
+  "vdup.f32   d4, %[scale]          @ alpha for leakey relu\n" \
+  "vmov.i32   d2, #0                @ zero  for leakey relu\n" \
+  "vdup.f32   d5, %[threshold]      @ alpha for leakey relu\n" \
+  "vadd.f32   d6, d0, d3            @ vaddq_f32 \n"            \
+  "vmul.f32   d8, d0, d4            @ vmulq_f32 \n"            \
+  "vmax.f32   d6, d6, d2            \n"                        \
+  "vmin.f32   d6, d6, d5            \n"                        \
+  "vmul.f32   d0, d8, d6            \n"                        \
   "vst1.32 {d0[0]}, [%[out]]        @ save result\n"
 
 #define SGEMV_OUT_4_BETA                   \
@@ -1558,6 +1920,22 @@ void sgemv_trans(const int M,
   "vmul.f32   q4, q0, q2          @ vmulq_f32 \n"            \
   "vbif q0,   q4, q3              @ choose \n"               \
   "vmla.f32 q0, q5, %q[vbeta]      \n"                        \
+  "vst1.32 {d0-d1}, [%[out]]      @ save result\n"
+
+#define SGEMV_OUT_4_HARD_SWISH_BETA                          \
+  /* end */                                                  \
+  "4:                             @ end\n"                   \
+  "vld1.32    {d4-d7}, [%[scale_v]]! @ offset \n"            \
+  "vmov.i32   q1, #0              @ zero for hardswish\n"    \
+  "vld1.32    {d8-d9}, [%[scale_v]]  @ threshold \n"         \
+  "sub        %[scale_v], #32     \n"                        \
+  "vadd.f32   q5, q0, q2          @ vaddq_f32 \n"            \
+  "vmul.f32   q6, q0, q3          @ vmulq_f32 \n"            \
+  "vld1.32    {d14-d15}, [%[out]] \n"                        \
+  "vmax.f32   q5, q5, q1          \n"                        \
+  "vmin.f32   q5, q5, q4          \n"                        \
+  "vmul.f32   q0, q5, q6          \n"                        \
+  "vmla.f32   q0, q7, %q[vbeta]   \n"                        \
   "vst1.32 {d0-d1}, [%[out]]      @ save result\n"
 
 #define SGEMV_OUT_1_BETA                   \
@@ -1603,6 +1981,23 @@ void sgemv_trans(const int M,
   "vmla.f32 d0, d4, d2        \n"                        \
   "vst1.32 {d0[0]}, [%[out]]        @ save result\n"
 
+#define SGEMV_OUT_1_HARD_SWISH_BETA                            \
+  /* end */                                                    \
+  "4:                               @ end\n"                   \
+  "vdup.f32   d3, %[offset]         @ alpha for leakey relu\n" \
+  "vdup.f32   d4, %[scale]          @ alpha for leakey relu\n" \
+  "vmov.i32   d2, #0                @ zero  for leakey relu\n" \
+  "vdup.f32   d5, %[threshold]      @ alpha for leakey relu\n" \
+  "vadd.f32   d6, d0, d3            @ vaddq_f32 \n"            \
+  "vmul.f32   d8, d0, d4            @ vmulq_f32 \n"            \
+  "vld1.32   {d9}, [%[out]]         \n"                        \
+  "vmax.f32   d6, d6, d2            \n"                        \
+  "vdup.f32   d4, %[beta]           \n"                        \
+  "vmin.f32   d6, d6, d5            \n"                        \
+  "vmul.f32   d0, d8, d6            \n"                        \
+  "vmla.f32   d0, d9, d4            \n"                        \
+  "vst1.32 {d0[0]}, [%[out]]        @ save result\n"
+
 #endif
 // clang-format on
 
@@ -1644,27 +2039,7 @@ void sgemv_trans(const int M,
   if (flag_bias) {                             \
     bias0 = bias[j];                           \
   }
-#endif
-void sgemv(const int M,
-           const int N,
-           const float *A,
-           const float *x,
-           float *y,
-           float beta,
-           bool flag_bias,
-           bool has_a53,
-           const float *bias) {
-  float *data_out = y;
-  const float *data_in = x;
-  const float *weights_ptr = A;
 
-  int cnt = N >> 3;
-  int tail = N & 7;
-  bool has_beta = fabsf(beta) > 1e-8f ? 1 : 0;
-  float32x4_t vbeta = vdupq_n_f32(beta);
-
-#ifdef __aarch64__
-  int out_cnt = M >> 3;
 #define MAIN_ASM                                                        \
   : [in] "+r"(ptr_in), [w0] "+r"(ptr_w0), [w1] "+r"(ptr_w1), \
     [w2] "+r"(ptr_w2), [w3] "+r"(ptr_w3), [w4] "+r"(ptr_w4), \
@@ -1676,161 +2051,254 @@ void sgemv(const int M,
     "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", \
     "v24", "v25", "cc", "memory"
 
-#define REMAIN_ASM                                              \
+#define REMAIN_ASM                                                \
   : [in] "+r"(ptr_in), [w0] "+r"(ptr_w0), [cnt] "+r"(cnt_loop), \
     [tail] "+r"(tail_loop)\
   : [out] "r"(ptr_out), [bias0] "r"(bias0), [beta] "r"(beta)\
-  : "v0", "v1", "v8", "v9", "v10", "v11", "v16", "v17", "x20", "cc", "memory"
+  : "v0", "v1", "v2", "v3", "v4", "v5", "v8", "v9", "v10", "v11", \
+    "v16", "v17", "x20", "cc", "memory"
 
+#else
+#define MAIN_LOOP                                    \
+  int out_idx = j * 4;                               \
+  float *ptr_out = data_out + out_idx;               \
+  const float *ptr_in = data_in;                     \
+  const float *ptr_w0 = weights_ptr + (N * out_idx); \
+  const float *ptr_w1 = ptr_w0 + N;                  \
+  const float *ptr_w2 = ptr_w1 + N;                  \
+  const float *ptr_w3 = ptr_w2 + N;                  \
+  float bias0 = 0.f;                                 \
+  float bias1 = 0.f;                                 \
+  float bias2 = 0.f;                                 \
+  float bias3 = 0.f;                                 \
+  if (flag_bias) {                                   \
+    bias0 = bias[out_idx];                           \
+    bias1 = bias[out_idx + 1];                       \
+    bias2 = bias[out_idx + 2];                       \
+    bias3 = bias[out_idx + 3];                       \
+  }                                                  \
+  int cnt_loop = cnt;                                \
+  int tail_loop = tail;
+
+#define REMAIN                                 \
+  float *ptr_out = data_out + j;               \
+  const float *ptr_in = data_in;               \
+  const float *ptr_w0 = weights_ptr + (N * j); \
+  int cnt_loop = cnt;                          \
+  int tail_loop = tail;                        \
+  float bias0 = 0.f;                           \
+  if (flag_bias) {                             \
+    bias0 = bias[j];                           \
+  }
+
+#endif
+void sgemv(const int M,
+           const int N,
+           const float *A,
+           const float *x,
+           float *y,
+           float beta,
+           bool flag_bias,
+           const float *bias,
+           const ARMContext *ctx) {
+  float *data_out = y;
+  const float *data_in = x;
+  const float *weights_ptr = A;
+  bool has_a53 = (ctx->arch() == kA53);
+  bool has_a35 = (ctx->arch() == kA35);
+
+  int cnt = N >> 3;
+  int tail = N & 7;
+  bool has_beta = fabsf(beta) > 1e-8f ? 1 : 0;
+  float32x4_t vbeta = vdupq_n_f32(beta);
+
+#ifdef __aarch64__
+  int out_cnt = M >> 3;
+  if (has_a35) {
+    cnt = N >> 2;
+    tail = N & 3;
+  }
   if (has_a53) {
     if (has_beta) {
-#pragma omp parallel for
-      for (int j = 0; j < out_cnt; j++) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
         MAIN_LOOP
         asm volatile(
             SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A53 SGEMV_OUT_8_BETA MAIN_ASM);
       }
-//! deal with remains
-#pragma omp parallel for
-      for (int j = out_cnt * 8; j < M; ++j) {
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
         REMAIN
         asm volatile(
             SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A53 SGEMV_OUT_1_BETA REMAIN_ASM);
       }
+      LITE_PARALLEL_COMMON_END();
     } else {
-#pragma omp parallel for
-      for (int j = 0; j < out_cnt; j++) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
         MAIN_LOOP
         asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A53 SGEMV_OUT_8 MAIN_ASM);
       }
-//! deal with remains
-#pragma omp parallel for
-      for (int j = out_cnt * 8; j < M; ++j) {
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
         REMAIN
         asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A53 SGEMV_OUT_1 REMAIN_ASM);
       }
+      LITE_PARALLEL_COMMON_END();
+    }
+  } else if (has_a35) {
+    if (has_beta) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+        MAIN_LOOP
+        asm volatile(
+            SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A35 SGEMV_OUT_8_BETA MAIN_ASM);
+      }
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+        REMAIN
+        asm volatile(
+            SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A35 SGEMV_OUT_1_BETA REMAIN_ASM);
+      }
+      LITE_PARALLEL_COMMON_END();
+    } else {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+        MAIN_LOOP
+        asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A35 SGEMV_OUT_8 MAIN_ASM);
+      }
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+        REMAIN
+        asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A35 SGEMV_OUT_1 REMAIN_ASM);
+      }
+      LITE_PARALLEL_COMMON_END();
     }
   } else {
     if (has_beta) {
-#pragma omp parallel for
-      for (int j = 0; j < out_cnt; j++) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
         MAIN_LOOP
         asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_BETA MAIN_ASM);
       }
-//! deal with remains
-#pragma omp parallel for
-      for (int j = out_cnt * 8; j < M; ++j) {
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
         REMAIN
         asm volatile(
             SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_BETA REMAIN_ASM);
       }
+      LITE_PARALLEL_COMMON_END();
     } else {
-#pragma omp parallel for
-      for (int j = 0; j < out_cnt; j++) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
         MAIN_LOOP
         asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8 MAIN_ASM);
       }
-//! deal with remains
-#pragma omp parallel for
-      for (int j = out_cnt * 8; j < M; ++j) {
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
         REMAIN
         asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1 REMAIN_ASM);
       }
+      LITE_PARALLEL_COMMON_END();
     }
   }
-#else  // __aarch64__
+#else   // __aarch64__
   int out_cnt = M >> 2;
-#pragma omp parallel for
-  for (int j = 0; j < out_cnt; j++) {
-    int out_idx = j * 4;
-    float *ptr_out = data_out + out_idx;
-    const float *ptr_in = data_in;
-    const float *ptr_w0 = weights_ptr + (N * out_idx);
-    const float *ptr_w1 = ptr_w0 + N;
-    const float *ptr_w2 = ptr_w1 + N;
-    const float *ptr_w3 = ptr_w2 + N;
-    float bias0 = 0.f;
-    float bias1 = 0.f;
-    float bias2 = 0.f;
-    float bias3 = 0.f;
-    if (flag_bias) {
-      bias0 = bias[out_idx];
-      bias1 = bias[out_idx + 1];
-      bias2 = bias[out_idx + 2];
-      bias3 = bias[out_idx + 3];
-    }
-    int cnt_loop = cnt;
-    int tail_loop = tail;
-    // clang-format off
-    if (has_beta) {
-        asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out),
-                    [bias0] "r"(bias0),
-                    [bias1] "r"(bias1),
-                    [bias2] "r"(bias2),
-                    [bias3] "r"(bias3),
-                    [vbeta] "w" (vbeta)
-                  : "q0", "q1", "q2", "q3", "q4",
-                    "q5", "q6", "q7", "q8", "q9",
-                    "q10", "q11", "q12", "q13", "cc",
-                    "memory");
-    } else {
-        asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out),
-                    [bias0] "r"(bias0),
-                    [bias1] "r"(bias1),
-                    [bias2] "r"(bias2),
-                    [bias3] "r"(bias3)
-                  : "q0", "q1", "q2", "q3", "q4",
-                    "q5", "q6", "q7", "q8", "q9",
-                    "q10", "q11", "q12", "q13", "cc",
-                    "memory");
-    }
-    // clang-format on
-  }
-//! deal with remains
-#pragma omp parallel for
-  for (int j = out_cnt * 4; j < M; ++j) {
-    float *ptr_out = data_out + j;
-    const float *ptr_in = data_in;
-    const float *ptr_w0 = weights_ptr + (N * j);
-    int cnt_loop = cnt;
-    int tail_loop = tail;
-    float bias0 = 0.f;
-    if (flag_bias) {
-      bias0 = bias[j];
-    }
-    if (has_beta) {
-      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_BETA
+  if (has_beta) {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_BETA
                    : [in] "+r"(ptr_in),
                      [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
                      [cnt] "+r"(cnt_loop),
                      [tail] "+r"(tail_loop)
-                   : [out] "r"(ptr_out), [bias0] "r"(bias0), [beta] "r"(beta)
-                   : "q0", "q1", "q12", "q13", "q14", "q15", "cc", "memory");
-    } else {
-      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3),
+                     [vbeta] "w"(vbeta)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(
+          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_BETA
+          : [in] "+r"(ptr_in),
+            [w0] "+r"(ptr_w0),
+            [cnt] "+r"(cnt_loop),
+            [tail] "+r"(tail_loop)
+          : [out] "r"(ptr_out), [bias0] "r"(bias0), [beta] "r"(beta)
+          : "q0", "q1", "q4", "q12", "q13", "q14", "q15", "cc", "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  } else {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4
                    : [in] "+r"(ptr_in),
                      [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
                      [cnt] "+r"(cnt_loop),
                      [tail] "+r"(tail_loop)
-                   : [out] "r"(ptr_out), [bias0] "r"(bias0)
-                   : "q0", "q1", "q12", "q13", "q14", "q15", "cc", "memory");
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
     }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(
+          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1
+          : [in] "+r"(ptr_in),
+            [w0] "+r"(ptr_w0),
+            [cnt] "+r"(cnt_loop),
+            [tail] "+r"(tail_loop)
+          : [out] "r"(ptr_out), [bias0] "r"(bias0)
+          : "q0", "q1", "q4", "q12", "q13", "q14", "q15", "cc", "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
   }
 #endif  // __aarch64__
 }
@@ -1842,8 +2310,8 @@ void sgemv_relu(const int M,
                 float *y,
                 float beta,
                 bool flag_bias,
-                bool has_a53,
-                const float *bias) {
+                const float *bias,
+                const ARMContext *ctx) {
   float *data_out = y;
   const float *data_in = x;
   const float *weights_ptr = A;
@@ -1852,163 +2320,203 @@ void sgemv_relu(const int M,
   int tail = N & 7;
   bool has_beta = fabsf(beta) > 1e-8f ? 1 : 0;
   float32x4_t vbeta = vdupq_n_f32(beta);
+  bool has_a53 = (ctx->arch() == kA53);
+  bool has_a35 = (ctx->arch() == kA35);
 
 #ifdef __aarch64__
   int out_cnt = M >> 3;
+  if (has_a35) {
+    cnt = N >> 2;
+    tail = N & 3;
+  }
   if (has_a53) {
     if (has_beta) {
-#pragma omp parallel for
-      for (int j = 0; j < out_cnt; j++) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
         MAIN_LOOP
         asm volatile(
             SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A53 SGEMV_OUT_8_RELU_BETA MAIN_ASM);
       }
-//! deal with remains
-#pragma omp parallel for
-      for (int j = out_cnt * 8; j < M; ++j) {
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
         REMAIN
         asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A53 SGEMV_OUT_1_RELU_BETA
                          REMAIN_ASM);
       }
+      LITE_PARALLEL_COMMON_END();
     } else {
-#pragma omp parallel for
-      for (int j = 0; j < out_cnt; j++) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
         MAIN_LOOP
         asm volatile(
             SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A53 SGEMV_OUT_8_RELU MAIN_ASM);
       }
-//! deal with remains
-#pragma omp parallel for
-      for (int j = out_cnt * 8; j < M; ++j) {
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
         REMAIN
         asm volatile(
             SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A53 SGEMV_OUT_1_RELU REMAIN_ASM);
       }
+      LITE_PARALLEL_COMMON_END();
+    }
+  } else if (has_a35) {
+    if (has_beta) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+        MAIN_LOOP
+        asm volatile(
+            SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A35 SGEMV_OUT_8_RELU_BETA MAIN_ASM);
+      }
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+        REMAIN
+        asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A35 SGEMV_OUT_1_RELU_BETA
+                         REMAIN_ASM);
+      }
+      LITE_PARALLEL_COMMON_END();
+    } else {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+        MAIN_LOOP
+        asm volatile(
+            SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A35 SGEMV_OUT_8_RELU MAIN_ASM);
+      }
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+        REMAIN
+        asm volatile(
+            SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A35 SGEMV_OUT_1_RELU REMAIN_ASM);
+      }
+      LITE_PARALLEL_COMMON_END();
     }
   } else {
     if (has_beta) {
-#pragma omp parallel for
-      for (int j = 0; j < out_cnt; j++) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
         MAIN_LOOP
         asm volatile(
             SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A53 SGEMV_OUT_8_RELU_BETA MAIN_ASM);
       }
-//! deal with remains
-#pragma omp parallel for
-      for (int j = out_cnt * 8; j < M; ++j) {
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
         REMAIN
         asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A53 SGEMV_OUT_1_RELU_BETA
                          REMAIN_ASM);
       }
+      LITE_PARALLEL_COMMON_END();
     } else {
-#pragma omp parallel for
-      for (int j = 0; j < out_cnt; j++) {
+      LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
         MAIN_LOOP
         asm volatile(
             SGEMV_IN_8_BIAS SGEMV_KERNEL_8_A53 SGEMV_OUT_8_RELU MAIN_ASM);
       }
-//! deal with remains
-#pragma omp parallel for
-      for (int j = out_cnt * 8; j < M; ++j) {
+      LITE_PARALLEL_END();
+      //! deal with remains
+      LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
         REMAIN
         asm volatile(
             SGEMV_IN_1_BIAS SGEMV_KERNEL_1_A53 SGEMV_OUT_1_RELU REMAIN_ASM);
       }
+      LITE_PARALLEL_COMMON_END();
     }
   }
-#else  // __aarch64__
+#else   // __aarch64__
   int out_cnt = M >> 2;
-#pragma omp parallel for
-  for (int j = 0; j < out_cnt; j++) {
-    int out_idx = j * 4;
-    float *ptr_out = data_out + out_idx;
-    const float *ptr_in = data_in;
-    const float *ptr_w0 = weights_ptr + (N * out_idx);
-    const float *ptr_w1 = ptr_w0 + N;
-    const float *ptr_w2 = ptr_w1 + N;
-    const float *ptr_w3 = ptr_w2 + N;
-    float bias0 = 0.f;
-    float bias1 = 0.f;
-    float bias2 = 0.f;
-    float bias3 = 0.f;
-    if (flag_bias) {
-      bias0 = bias[out_idx];
-      bias1 = bias[out_idx + 1];
-      bias2 = bias[out_idx + 2];
-      bias3 = bias[out_idx + 3];
+  if (has_beta) {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_RELU_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3),
+                     [vbeta] "w"(vbeta)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
     }
-    int cnt_loop = cnt;
-    int tail_loop = tail;
-    // clang-format off
-    if (has_beta) {
-        asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_RELU_BETA
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out),
-                    [bias0] "r"(bias0),
-                    [bias1] "r"(bias1),
-                    [bias2] "r"(bias2),
-                    [bias3] "r"(bias3),
-                    [vbeta] "w"(vbeta)
-                  : "q0", "q1", "q2", "q3", "q4",
-                    "q5", "q6", "q7", "q8", "q9",
-                    "q10", "q11", "q12", "q13", "cc",
-                    "memory");
-    } else {
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(
+          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU_BETA
+          : [in] "+r"(ptr_in),
+            [w0] "+r"(ptr_w0),
+            [cnt] "+r"(cnt_loop),
+            [tail] "+r"(tail_loop)
+          : [out] "r"(ptr_out), [bias0] "r"(bias0), [beta] "r"(beta)
+          : "q0", "q1", "q4", "q12", "q13", "q14", "q15", "cc", "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  } else {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
       asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_RELU
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out),
-                    [bias0] "r"(bias0),
-                    [bias1] "r"(bias1),
-                    [bias2] "r"(bias2),
-                    [bias3] "r"(bias3)
-                  : "q0", "q1", "q2", "q3", "q4",
-                    "q5", "q6", "q7", "q8", "q9",
-                    "q10", "q11", "q12", "q13", "cc",
-                    "memory");
-    }
-    // clang-format on
-  }
-//! deal with remains
-#pragma omp parallel for
-  for (int j = out_cnt * 4; j < M; ++j) {
-    float *ptr_out = data_out + j;
-    const float *ptr_in = data_in;
-    const float *ptr_w0 = weights_ptr + (N * j);
-    int cnt_loop = cnt;
-    int tail_loop = tail;
-    float bias0 = 0.f;
-    if (flag_bias) {
-      bias0 = bias[j];
-    }
-    if (has_beta) {
-      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU_BETA
                    : [in] "+r"(ptr_in),
                      [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
                      [cnt] "+r"(cnt_loop),
                      [tail] "+r"(tail_loop)
-                   : [out] "r"(ptr_out), [bias0] "r"(bias0), [beta] "r"(beta)
-                   : "q0", "q1", "q12", "q13", "q14", "q15", "cc", "memory");
-    } else {
-      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU
-                   : [in] "+r"(ptr_in),
-                     [w0] "+r"(ptr_w0),
-                     [cnt] "+r"(cnt_loop),
-                     [tail] "+r"(tail_loop)
-                   : [out] "r"(ptr_out), [bias0] "r"(bias0)
-                   : "q0", "q1", "q12", "q13", "q14", "q15", "cc", "memory");
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
     }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(
+          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU
+          : [in] "+r"(ptr_in),
+            [w0] "+r"(ptr_w0),
+            [cnt] "+r"(cnt_loop),
+            [tail] "+r"(tail_loop)
+          : [out] "r"(ptr_out), [bias0] "r"(bias0)
+          : "q0", "q1", "q4", "q12", "q13", "q14", "q15", "cc", "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
   }
 #endif  // __aarch64__
 }
@@ -2021,7 +2529,8 @@ void sgemv_relu6(const int M,
                  float beta,
                  bool flag_bias,
                  const float *bias,
-                 const float six) {
+                 const float six,
+                 const ARMContext *ctx) {
   float *data_out = y;
   const float *data_in = x;
   const float *weights_ptr = A;
@@ -2034,157 +2543,58 @@ void sgemv_relu6(const int M,
 
 #ifdef __aarch64__
   int out_cnt = M >> 3;
-#pragma omp parallel for
-  for (int j = 0; j < out_cnt; j++) {
-    MAIN_LOOP
-    // clang-format off
-    if (has_beta) {
+  if (has_beta) {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
       asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_RELU6_BETA
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [w4] "+r"(ptr_w4),
-                    [w5] "+r"(ptr_w5),
-                    [w6] "+r"(ptr_w6),
-                    [w7] "+r"(ptr_w7),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out), [bias_ptr] "r"(bias_local), 
-                    [vsix] "w" (vsix), [vbeta] "w"(vbeta)
-                  : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
-                    "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15",
-                    "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
-                    "v24", "v25", "cc", "memory");
-    } else {
-      asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_RELU6
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [w4] "+r"(ptr_w4),
-                    [w5] "+r"(ptr_w5),
-                    [w6] "+r"(ptr_w6),
-                    [w7] "+r"(ptr_w7),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out), [bias_ptr] "r"(bias_local), 
-                    [vsix] "w" (vsix)
-                  : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
-                    "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15",
-                    "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
-                    "v24", "v25", "cc", "memory");
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [w4] "+r"(ptr_w4),
+                     [w5] "+r"(ptr_w5),
+                     [w6] "+r"(ptr_w6),
+                     [w7] "+r"(ptr_w7),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias_ptr] "r"(bias_local),
+                     [vsix] "w"(vsix),
+                     [vbeta] "w"(vbeta)
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v6",
+                     "v7",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v12",
+                     "v13",
+                     "v14",
+                     "v15",
+                     "v16",
+                     "v17",
+                     "v18",
+                     "v19",
+                     "v20",
+                     "v21",
+                     "v22",
+                     "v23",
+                     "v24",
+                     "v25",
+                     "cc",
+                     "memory");
     }
-    // clang-format on
-  }
-//! deal with remains
-#pragma omp parallel for
-  for (int j = out_cnt * 8; j < M; ++j) {
-    REMAIN
-    if (has_beta) {
-      asm volatile(
-          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU6_BETA
-          : [in] "+r"(ptr_in),
-            [w0] "+r"(ptr_w0),
-            [cnt] "+r"(cnt_loop),
-            [tail] "+r"(tail_loop)
-          : [out] "r"(ptr_out),
-            [bias0] "r"(bias0),
-            [six] "r"(six),
-            [beta] "r"(beta)
-          : "v0", "v1", "v8", "v9", "v10", "v11", "v16", "v17", "cc", "memory");
-    } else {
-      asm volatile(
-          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU6
-          : [in] "+r"(ptr_in),
-            [w0] "+r"(ptr_w0),
-            [cnt] "+r"(cnt_loop),
-            [tail] "+r"(tail_loop)
-          : [out] "r"(ptr_out), [bias0] "r"(bias0), [six] "r"(six)
-          : "v0", "v1", "v8", "v9", "v10", "v11", "v16", "v17", "cc", "memory");
-    }
-  }
-#else  // __aarch64__
-  int out_cnt = M >> 2;
-#pragma omp parallel for
-  for (int j = 0; j < out_cnt; j++) {
-    int out_idx = j * 4;
-    float *ptr_out = data_out + out_idx;
-    const float *ptr_in = data_in;
-    const float *ptr_w0 = weights_ptr + (N * out_idx);
-    const float *ptr_w1 = ptr_w0 + N;
-    const float *ptr_w2 = ptr_w1 + N;
-    const float *ptr_w3 = ptr_w2 + N;
-    float bias0 = 0.f;
-    float bias1 = 0.f;
-    float bias2 = 0.f;
-    float bias3 = 0.f;
-    if (flag_bias) {
-      bias0 = bias[out_idx];
-      bias1 = bias[out_idx + 1];
-      bias2 = bias[out_idx + 2];
-      bias3 = bias[out_idx + 3];
-    }
-    int cnt_loop = cnt;
-    int tail_loop = tail;
-    // clang-format off
-    if (has_beta) {
-      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_RELU6_BETA
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out),
-                    [bias0] "r"(bias0),
-                    [bias1] "r"(bias1),
-                    [bias2] "r"(bias2),
-                    [bias3] "r"(bias3),
-                    [six] "r" (six),
-                    [vbeta] "w"(vbeta)
-                  : "q0", "q1", "q2", "q3", "q4",
-                    "q5", "q6", "q7", "q8", "q9",
-                    "q10", "q11", "q12", "q13", "cc",
-                    "memory");
-    } else {
-      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_RELU6
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out),
-                    [bias0] "r"(bias0),
-                    [bias1] "r"(bias1),
-                    [bias2] "r"(bias2),
-                    [bias3] "r"(bias3),
-                    [six] "r" (six)
-                  : "q0", "q1", "q2", "q3", "q4",
-                    "q5", "q6", "q7", "q8", "q9",
-                    "q10", "q11", "q12", "q13", "cc",
-                    "memory");
-    }
-    // clang-format on
-  }
-//! deal with remains
-#pragma omp parallel for
-  for (int j = out_cnt * 4; j < M; ++j) {
-    float *ptr_out = data_out + j;
-    const float *ptr_in = data_in;
-    const float *ptr_w0 = weights_ptr + (N * j);
-    int cnt_loop = cnt;
-    int tail_loop = tail;
-    float bias0 = 0.f;
-    if (flag_bias) {
-      bias0 = bias[j];
-    }
-    if (has_beta) {
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+      REMAIN
       asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU6_BETA
                    : [in] "+r"(ptr_in),
                      [w0] "+r"(ptr_w0),
@@ -2194,16 +2604,215 @@ void sgemv_relu6(const int M,
                      [bias0] "r"(bias0),
                      [six] "r"(six),
                      [beta] "r"(beta)
-                   : "q0", "q1", "q12", "q13", "q14", "q15", "cc", "memory");
-    } else {
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v16",
+                     "v17",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  } else {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      asm volatile(
+          SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_RELU6
+          : [in] "+r"(ptr_in),
+            [w0] "+r"(ptr_w0),
+            [w1] "+r"(ptr_w1),
+            [w2] "+r"(ptr_w2),
+            [w3] "+r"(ptr_w3),
+            [w4] "+r"(ptr_w4),
+            [w5] "+r"(ptr_w5),
+            [w6] "+r"(ptr_w6),
+            [w7] "+r"(ptr_w7),
+            [cnt] "+r"(cnt_loop),
+            [tail] "+r"(tail_loop)
+          : [out] "r"(ptr_out), [bias_ptr] "r"(bias_local), [vsix] "w"(vsix)
+          : "v0",
+            "v1",
+            "v2",
+            "v3",
+            "v4",
+            "v5",
+            "v6",
+            "v7",
+            "v8",
+            "v9",
+            "v10",
+            "v11",
+            "v12",
+            "v13",
+            "v14",
+            "v15",
+            "v16",
+            "v17",
+            "v18",
+            "v19",
+            "v20",
+            "v21",
+            "v22",
+            "v23",
+            "v24",
+            "v25",
+            "cc",
+            "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+      REMAIN
       asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU6
                    : [in] "+r"(ptr_in),
                      [w0] "+r"(ptr_w0),
                      [cnt] "+r"(cnt_loop),
                      [tail] "+r"(tail_loop)
                    : [out] "r"(ptr_out), [bias0] "r"(bias0), [six] "r"(six)
-                   : "q0", "q1", "q12", "q13", "q14", "q15", "cc", "memory");
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v16",
+                     "v17",
+                     "cc",
+                     "memory");
     }
+    LITE_PARALLEL_COMMON_END();
+  }
+#else   // __aarch64__
+  int out_cnt = M >> 2;
+  if (has_beta) {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_RELU6_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3),
+                     [six] "r"(six),
+                     [vbeta] "w"(vbeta)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU6_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [six] "r"(six),
+                     [beta] "r"(beta)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q12",
+                     "q13",
+                     "q14",
+                     "q15",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  } else {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_RELU6
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3),
+                     [six] "r"(six)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_RELU6
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out), [bias0] "r"(bias0), [six] "r"(six)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q12",
+                     "q13",
+                     "q14",
+                     "q15",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
   }
 #endif  // __aarch64__
 }
@@ -2216,7 +2825,8 @@ void sgemv_leakey_relu(const int M,
                        float beta,
                        bool flag_bias,
                        const float *bias,
-                       const float alpha) {
+                       const float alpha,
+                       const ARMContext *ctx) {
   float *data_out = y;
   const float *data_in = x;
   const float *weights_ptr = A;
@@ -2227,182 +2837,614 @@ void sgemv_leakey_relu(const int M,
   float32x4_t vbeta = vdupq_n_f32(beta);
 #ifdef __aarch64__
   int out_cnt = M >> 3;
-#pragma omp parallel for
-  for (int j = 0; j < out_cnt; j++) {
-    MAIN_LOOP
-    // clang-format off
-    if (has_beta) {
+  if (has_beta) {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
       asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_LEAKEY_RELU_BETA
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [w4] "+r"(ptr_w4),
-                    [w5] "+r"(ptr_w5),
-                    [w6] "+r"(ptr_w6),
-                    [w7] "+r"(ptr_w7),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out), [bias_ptr] "r"(bias_local), 
-                    [valpha] "w" (valpha), [vbeta] "w"(vbeta)
-                  : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
-                    "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15",
-                    "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
-                    "v24", "v25", "cc", "memory");
-    } else {
-      asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_LEAKEY_RELU
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [w4] "+r"(ptr_w4),
-                    [w5] "+r"(ptr_w5),
-                    [w6] "+r"(ptr_w6),
-                    [w7] "+r"(ptr_w7),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out), [bias_ptr] "r"(bias_local), 
-                    [valpha] "w" (valpha)
-                  : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
-                    "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15",
-                    "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
-                    "v24", "v25", "cc", "memory");
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [w4] "+r"(ptr_w4),
+                     [w5] "+r"(ptr_w5),
+                     [w6] "+r"(ptr_w6),
+                     [w7] "+r"(ptr_w7),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias_ptr] "r"(bias_local),
+                     [valpha] "w"(valpha),
+                     [vbeta] "w"(vbeta)
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v6",
+                     "v7",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v12",
+                     "v13",
+                     "v14",
+                     "v15",
+                     "v16",
+                     "v17",
+                     "v18",
+                     "v19",
+                     "v20",
+                     "v21",
+                     "v22",
+                     "v23",
+                     "v24",
+                     "v25",
+                     "cc",
+                     "memory");
     }
-    // clang-format on
-  }
-//! deal with remains
-#pragma omp parallel for
-  for (int j = out_cnt * 8; j < M; ++j) {
-    REMAIN
-    if (has_beta) {
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_LEAKEY_RELU_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [alpha] "r"(alpha),
+                     [beta] "r"(beta)
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v16",
+                     "v17",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  } else {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
       asm volatile(
-          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_LEAKEY_RELU_BETA
+          SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_LEAKEY_RELU
           : [in] "+r"(ptr_in),
             [w0] "+r"(ptr_w0),
+            [w1] "+r"(ptr_w1),
+            [w2] "+r"(ptr_w2),
+            [w3] "+r"(ptr_w3),
+            [w4] "+r"(ptr_w4),
+            [w5] "+r"(ptr_w5),
+            [w6] "+r"(ptr_w6),
+            [w7] "+r"(ptr_w7),
             [cnt] "+r"(cnt_loop),
             [tail] "+r"(tail_loop)
-          : [out] "r"(ptr_out),
-            [bias0] "r"(bias0),
-            [alpha] "r"(alpha),
-            [beta] "r"(beta)
-          : "v0", "v1", "v8", "v9", "v10", "v11", "v16", "v17", "cc", "memory");
-    } else {
-      asm volatile(
-          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_LEAKEY_RELU
-          : [in] "+r"(ptr_in),
-            [w0] "+r"(ptr_w0),
-            [cnt] "+r"(cnt_loop),
-            [tail] "+r"(tail_loop)
-          : [out] "r"(ptr_out), [bias0] "r"(bias0), [alpha] "r"(alpha)
-          : "v0", "v1", "v8", "v9", "v10", "v11", "v16", "v17", "cc", "memory");
+          : [out] "r"(ptr_out), [bias_ptr] "r"(bias_local), [valpha] "w"(valpha)
+          : "v0",
+            "v1",
+            "v2",
+            "v3",
+            "v4",
+            "v5",
+            "v6",
+            "v7",
+            "v8",
+            "v9",
+            "v10",
+            "v11",
+            "v12",
+            "v13",
+            "v14",
+            "v15",
+            "v16",
+            "v17",
+            "v18",
+            "v19",
+            "v20",
+            "v21",
+            "v22",
+            "v23",
+            "v24",
+            "v25",
+            "cc",
+            "memory");
     }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_LEAKEY_RELU
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out), [bias0] "r"(bias0), [alpha] "r"(alpha)
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v16",
+                     "v17",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
   }
-#else  // __aarch64__
+#else   // __aarch64__
   int out_cnt = M >> 2;
-#pragma omp parallel for
-  for (int j = 0; j < out_cnt; j++) {
-    int out_idx = j * 4;
-    float *ptr_out = data_out + out_idx;
-    const float *ptr_in = data_in;
-    const float *ptr_w0 = weights_ptr + (N * out_idx);
-    const float *ptr_w1 = ptr_w0 + N;
-    const float *ptr_w2 = ptr_w1 + N;
-    const float *ptr_w3 = ptr_w2 + N;
-    float bias0 = 0.f;
-    float bias1 = 0.f;
-    float bias2 = 0.f;
-    float bias3 = 0.f;
-    if (flag_bias) {
-      bias0 = bias[out_idx];
-      bias1 = bias[out_idx + 1];
-      bias2 = bias[out_idx + 2];
-      bias3 = bias[out_idx + 3];
-    }
-    int cnt_loop = cnt;
-    int tail_loop = tail;
-    // clang-format off
-    if (has_beta) {
+  if (has_beta) {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
       asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_LEAKEY_RELU_BETA
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out),
-                    [bias0] "r"(bias0),
-                    [bias1] "r"(bias1),
-                    [bias2] "r"(bias2),
-                    [bias3] "r"(bias3),
-                    [alpha] "r" (alpha),
-                    [vbeta] "w"(vbeta)
-                  : "q0", "q1", "q2", "q3", "q4",
-                    "q5", "q6", "q7", "q8", "q9",
-                    "q10", "q11", "q12", "q13", "cc",
-                    "memory");
-    } else {
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3),
+                     [alpha] "r"(alpha),
+                     [vbeta] "w"(vbeta)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_LEAKEY_RELU_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [alpha] "r"(alpha),
+                     [beta] "r"(beta)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q12",
+                     "q13",
+                     "q14",
+                     "q15",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  } else {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
       asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_LEAKEY_RELU
-                  : [in] "+r"(ptr_in),
-                    [w0] "+r"(ptr_w0),
-                    [w1] "+r"(ptr_w1),
-                    [w2] "+r"(ptr_w2),
-                    [w3] "+r"(ptr_w3),
-                    [cnt] "+r"(cnt_loop),
-                    [tail] "+r"(tail_loop)
-                  : [out] "r"(ptr_out),
-                    [bias0] "r"(bias0),
-                    [bias1] "r"(bias1),
-                    [bias2] "r"(bias2),
-                    [bias3] "r"(bias3),
-                    [alpha] "r" (alpha)
-                  : "q0", "q1", "q2", "q3", "q4",
-                    "q5", "q6", "q7", "q8", "q9",
-                    "q10", "q11", "q12", "q13", "cc",
-                    "memory");
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3),
+                     [alpha] "r"(alpha)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
     }
-    // clang-format on
-  }
-//! deal with remains
-#pragma omp parallel for
-  for (int j = out_cnt * 4; j < M; ++j) {
-    float *ptr_out = data_out + j;
-    const float *ptr_in = data_in;
-    const float *ptr_w0 = weights_ptr + (N * j);
-    int cnt_loop = cnt;
-    int tail_loop = tail;
-    float bias0 = 0.f;
-    if (flag_bias) {
-      bias0 = bias[j];
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_LEAKEY_RELU
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out), [bias0] "r"(bias0), [alpha] "r"(alpha)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q12",
+                     "q13",
+                     "q14",
+                     "q15",
+                     "cc",
+                     "memory");
     }
-    if (has_beta) {
-      asm volatile(
-          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_LEAKEY_RELU_BETA
-          : [in] "+r"(ptr_in),
-            [w0] "+r"(ptr_w0),
-            [cnt] "+r"(cnt_loop),
-            [tail] "+r"(tail_loop)
-          : [out] "r"(ptr_out),
-            [bias0] "r"(bias0),
-            [alpha] "r"(alpha),
-            [beta] "r"(beta)
-          : "q0", "q1", "q3", "q4", "q12", "q13", "q14", "q15", "cc", "memory");
-    } else {
-      asm volatile(
-          SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_LEAKEY_RELU
-          : [in] "+r"(ptr_in),
-            [w0] "+r"(ptr_w0),
-            [cnt] "+r"(cnt_loop),
-            [tail] "+r"(tail_loop)
-          : [out] "r"(ptr_out), [bias0] "r"(bias0), [alpha] "r"(alpha)
-          : "q0", "q1", "q3", "q4", "q12", "q13", "q14", "q15", "cc", "memory");
-    }
+    LITE_PARALLEL_COMMON_END();
   }
 #endif  // __aarch64__
 }
 
+void sgemv_hard_swish(const int M,
+                      const int N,
+                      const float *A,
+                      const float *x,
+                      float *y,
+                      float beta,
+                      bool flag_bias,
+                      const float *bias,
+                      const float scale,
+                      const float offset,
+                      const float threshold,
+                      const ARMContext *ctx) {
+  float *data_out = y;
+  const float *data_in = x;
+  const float *weights_ptr = A;
+  int cnt = N >> 3;
+  int tail = N & 7;
+  bool has_beta = fabsf(beta) > 1e-8f ? 1 : 0;
+  float32x4_t vbeta = vdupq_n_f32(beta);
+  float scale_r = 1.0 / scale;
+#ifdef __aarch64__
+  int out_cnt = M >> 3;
+  float32x4_t vscale = vdupq_n_f32(scale_r);
+  float32x4_t voffset = vdupq_n_f32(offset);
+  float32x4_t vthreshold = vdupq_n_f32(threshold);
+  if (has_beta) {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_HARD_SWISH_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [w4] "+r"(ptr_w4),
+                     [w5] "+r"(ptr_w5),
+                     [w6] "+r"(ptr_w6),
+                     [w7] "+r"(ptr_w7),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias_ptr] "r"(bias_local),
+                     [vscale] "w"(vscale),
+                     [vthreshold] "w"(vthreshold),
+                     [voffset] "w"(voffset),
+                     [vbeta] "w"(vbeta)
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v6",
+                     "v7",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v12",
+                     "v13",
+                     "v14",
+                     "v15",
+                     "v16",
+                     "v17",
+                     "v18",
+                     "v19",
+                     "v20",
+                     "v21",
+                     "v22",
+                     "v23",
+                     "v24",
+                     "v25",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_HARD_SWISH_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [scale] "r"(scale_r),
+                     [threshold] "r"(threshold),
+                     [offset] "r"(offset),
+                     [beta] "r"(beta)
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v16",
+                     "v17",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  } else {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      asm volatile(SGEMV_IN_8_BIAS SGEMV_KERNEL_8 SGEMV_OUT_8_HARD_SWISH
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [w4] "+r"(ptr_w4),
+                     [w5] "+r"(ptr_w5),
+                     [w6] "+r"(ptr_w6),
+                     [w7] "+r"(ptr_w7),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias_ptr] "r"(bias_local),
+                     [vscale] "w"(vscale),
+                     [vthreshold] "w"(vthreshold),
+                     [voffset] "w"(voffset)
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v6",
+                     "v7",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v12",
+                     "v13",
+                     "v14",
+                     "v15",
+                     "v16",
+                     "v17",
+                     "v18",
+                     "v19",
+                     "v20",
+                     "v21",
+                     "v22",
+                     "v23",
+                     "v24",
+                     "v25",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 8), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_HARD_SWISH
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [scale] "r"(scale_r),
+                     [offset] "r"(offset),
+                     [threshold] "r"(threshold)
+                   : "v0",
+                     "v1",
+                     "v2",
+                     "v3",
+                     "v4",
+                     "v5",
+                     "v8",
+                     "v9",
+                     "v10",
+                     "v11",
+                     "v16",
+                     "v17",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  }
+#else   // __aarch64__
+  int out_cnt = M >> 2;
+  float scale_v[12] = {offset,
+                       offset,
+                       offset,
+                       offset,
+                       scale_r,
+                       scale_r,
+                       scale_r,
+                       scale_r,
+                       threshold,
+                       threshold,
+                       threshold,
+                       threshold};
+  if (has_beta) {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      auto tmp_ptr = scale_v;
+      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_HARD_SWISH_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [cnt] "+r"(cnt_loop),
+                     [scale_v] "+r"(tmp_ptr),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3),
+                     [vbeta] "w"(vbeta)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_HARD_SWISH_BETA
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [scale] "r"(scale_r),
+                     [offset] "r"(offset),
+                     [threshold] "r"(threshold),
+                     [beta] "r"(beta)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q12",
+                     "q13",
+                     "q14",
+                     "q15",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  } else {
+    LITE_PARALLEL_BEGIN(j, tid, out_cnt) {
+      MAIN_LOOP
+      auto tmp_ptr = scale_v;
+      asm volatile(SGEMV_IN_4_BIAS SGEMV_KERNEL_4 SGEMV_OUT_4_HARD_SWISH
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [w1] "+r"(ptr_w1),
+                     [w2] "+r"(ptr_w2),
+                     [w3] "+r"(ptr_w3),
+                     [cnt] "+r"(cnt_loop),
+                     [scale_v] "+r"(tmp_ptr),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [bias1] "r"(bias1),
+                     [bias2] "r"(bias2),
+                     [bias3] "r"(bias3)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q5",
+                     "q6",
+                     "q7",
+                     "q8",
+                     "q9",
+                     "q10",
+                     "q11",
+                     "q12",
+                     "q13",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_END();
+    //! deal with remains
+    LITE_PARALLEL_COMMON_BEGIN(j, tid, M, (out_cnt * 4), 1) {
+      REMAIN
+      asm volatile(SGEMV_IN_1_BIAS SGEMV_KERNEL_1 SGEMV_OUT_1_HARD_SWISH
+                   : [in] "+r"(ptr_in),
+                     [w0] "+r"(ptr_w0),
+                     [cnt] "+r"(cnt_loop),
+                     [tail] "+r"(tail_loop)
+                   : [out] "r"(ptr_out),
+                     [bias0] "r"(bias0),
+                     [scale] "r"(scale_r),
+                     [offset] "r"(offset),
+                     [threshold] "r"(threshold)
+                   : "q0",
+                     "q1",
+                     "q2",
+                     "q3",
+                     "q4",
+                     "q12",
+                     "q13",
+                     "q14",
+                     "q15",
+                     "cc",
+                     "memory");
+    }
+    LITE_PARALLEL_COMMON_END();
+  }
+#endif  // __aarch64__
+}
+
+#undef MAIN_LOOP
+#undef REMAIN
+#undef MAIN_ASM
+#undef REMAIN_ASM
 }  // namespace math
 }  // namespace arm
 }  // namespace lite

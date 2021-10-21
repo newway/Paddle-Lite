@@ -15,7 +15,7 @@
 #include <gtest/gtest.h>
 #include "lite/api/paddle_use_kernels.h"
 #include "lite/api/paddle_use_ops.h"
-#include "lite/core/arena/framework.h"
+#include "lite/core/test/arena/framework.h"
 
 namespace paddle {
 namespace lite {
@@ -86,7 +86,7 @@ class NormComputeTester : public arena::TestCase {
 };
 void test_norm(Place place, float abs_error) {
   DDimLite dims{{3, 5, 4, 4}};
-  for (int axis : {1}) {
+  for (int axis : {1, 2, 3}) {
     for (float epsilon : {1e-9}) {
       std::unique_ptr<arena::TestCase> tester(
           new NormComputeTester(place, "def", axis, epsilon, dims));

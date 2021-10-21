@@ -15,6 +15,12 @@ WITH_CV=OFF
 WITH_LOG=ON
 # controls whether to throw the exception when error occurs, default is OFF 
 WITH_EXCEPTION=OFF
+# controls whether to use metal, default is OFF
+WITH_METAL=OFF
+# controls whether to build with profiler, default is OFF
+WITH_PROFILE=OFF
+# controls whether to build with Xcode, default is OFF
+WITH_XCODE=OFF
 # absolute path of Paddle-Lite.
 workspace=$PWD/$(dirname $0)/../../
 # options of striping lib according to input model.
@@ -58,7 +64,15 @@ function make_ios {
         WITH_EXTRA=ON
     fi
 
-    build_dir=$workspace/build.ios.${os}.${arch}
+    if [ "${WITH_XCODE}" == "ON" ]; then
+        cmake_common_options="-G Xcode"
+    fi
+
+    if [ "${WITH_METAL}" == "ON" ]; then
+        build_dir=$workspace/build.ios.metal.${os}.${arch}
+    else
+        build_dir=$workspace/build.ios.${os}.${arch}
+    fi
     if [ -d $build_dir ]
     then
         rm -rf $build_dir
@@ -70,9 +84,12 @@ function make_ios {
     GEN_CODE_PATH_PREFIX=lite/gen_code
     mkdir -p ./${GEN_CODE_PATH_PREFIX}
     touch ./${GEN_CODE_PATH_PREFIX}/__generated_code__.cc
-    cmake $workspace \
+    cmake $workspace $cmake_common_options \
             -DWITH_LITE=ON \
+            -DLITE_WITH_METAL=$WITH_METAL \
             -DLITE_WITH_ARM=ON \
+            -DLITE_WITH_XCODE=$WITH_XCODE \
+            -DLITE_WITH_PROFILE=${WITH_PROFILE} \
             -DLITE_ON_TINY_PUBLISH=ON \
             -DLITE_WITH_OPENMP=OFF \
             -DWITH_ARM_DOTPROD=OFF \
@@ -87,6 +104,10 @@ function make_ios {
             -DLITE_WITH_CV=$WITH_CV \
             -DDEPLOYMENT_TARGET=${IOS_DEPLOYMENT_TARGET} \
             -DARM_TARGET_OS=$os
+
+    if [ "${WITH_XCODE}" == "ON" ]; then
+        return
+    fi
 
     make publish_inference -j$NUM_PROC
     cd -
@@ -106,6 +127,7 @@ function print_usage {
     echo -e "|                                                                                                                                      |"
     echo -e "|  optional argument:                                                                                                                  |"
     echo -e "|     --arch: (armv8|armv7), default is armv8                                                                                          |"
+    echo -e "|     --with_metal: (ON|OFF), controls whether to use metal default is OFF                                                             |"
     echo -e "|     --with_cv: (OFF|ON); controls whether to compile cv functions into lib, default is OFF                                           |"
     echo -e "|     --with_log: (OFF|ON); controls whether to print log information, default is ON                                                   |"
     echo -e "|     --with_exception: (OFF|ON); controls whether to throw the exception when error occurs, default is OFF                            |"
@@ -158,8 +180,20 @@ function main {
                 WITH_EXCEPTION="${i#*=}"
                 shift
                 ;;
+            --with_metal=*)
+                WITH_METAL="${i#*=}"
+                shift
+                ;;
             --ios_deployment_target=*)
                 IOS_DEPLOYMENT_TARGET="${i#*=}"
+                shift
+                ;;
+            --with_profile=*)
+                WITH_PROFILE="${i#*=}"
+                shift
+                ;;
+            --with_xcode=*)
+                WITH_XCODE="${i#*=}"
                 shift
                 ;;
             help)

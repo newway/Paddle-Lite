@@ -28,10 +28,10 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include "lite/utils/cp_logging.h"
+#include "lite/utils/log/cp_logging.h"
 #include "lite/utils/replace_stl/stream.h"
 #include "lite/utils/string.h"
-#ifndef LITE_WITH_XCODE
+#if !defined(TARGET_IOS)
 #include <gflags/gflags.h>
 #endif
 namespace paddle {
@@ -173,7 +173,7 @@ class BasicProfiler {
     warmup_ = warmup_times * 2;
   }
 
-  virtual ~BasicProfiler() = default;
+  ~BasicProfiler();
 
  private:
   std::string name_;

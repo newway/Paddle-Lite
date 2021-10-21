@@ -15,7 +15,7 @@
 #include <gtest/gtest.h>
 #include "lite/api/paddle_use_kernels.h"
 #include "lite/api/paddle_use_ops.h"
-#include "lite/core/arena/framework.h"
+#include "lite/core/test/arena/framework.h"
 
 namespace paddle {
 namespace lite {
@@ -197,7 +197,7 @@ class Squeeze2ComputeTester : public arena::TestCase {
 
 void test_squeeze(Place place) {
   for (std::vector<int> axes : {std::vector<int>({}),
-                                std::vector<int>({0, 2}),
+                                std::vector<int>({0}),
                                 std::vector<int>({0, -2})}) {
     for (int N : {1}) {
       for (int C : {3}) {
@@ -218,7 +218,7 @@ void test_squeeze(Place place) {
 
 void test_squeeze2(Place place) {
   for (std::vector<int> axes : {std::vector<int>({}),
-                                std::vector<int>({0, 2}),
+                                std::vector<int>({0}),
                                 std::vector<int>({0, -2})}) {
     for (int N : {1}) {
       for (int C : {3}) {
@@ -238,7 +238,10 @@ void test_squeeze2(Place place) {
 }
 
 TEST(squeeze, precision) {
-#if defined(LITE_WITH_OPENCL)
+#if defined(LITE_WITH_NNADAPTER) && defined(NNADAPTER_WITH_HUAWEI_ASCEND_NPU)
+  Place place(TARGET(kNNAdapter));
+  test_squeeze(place);
+#elif defined(LITE_WITH_OPENCL)
   Place place(TARGET(kOpenCL));
   test_squeeze(place);
 #elif defined(LITE_WITH_XPU) && !defined(LITE_WITH_XTCL)
@@ -251,7 +254,10 @@ TEST(squeeze, precision) {
 }
 
 TEST(squeeze2, precision) {
-#if defined(LITE_WITH_OPENCL)
+#if defined(LITE_WITH_NNADAPTER) && defined(NNADAPTER_WITH_HUAWEI_ASCEND_NPU)
+  Place place(TARGET(kNNAdapter));
+  test_squeeze2(place);
+#elif defined(LITE_WITH_OPENCL)
   Place place(TARGET(kOpenCL));
   test_squeeze2(place);
 #elif defined(LITE_WITH_XPU) && !defined(LITE_WITH_XTCL)

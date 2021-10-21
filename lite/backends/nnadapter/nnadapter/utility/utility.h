@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <sys/time.h>
 #include <algorithm>
 #include <map>
 #include <string>
@@ -24,34 +25,51 @@
 namespace nnadapter {
 
 // Check quantization type
-bool IsPerLayerQuantization(NNAdapterOperandPrecisionCode type);
-bool IsPerChannelQuantization(NNAdapterOperandPrecisionCode type);
-bool IsAsymmetricQuantization(NNAdapterOperandPrecisionCode type);
-bool IsSymmetricQuantization(NNAdapterOperandPrecisionCode type);
-bool IsAsymmPerLayerQuantization(NNAdapterOperandPrecisionCode type);
-bool IsSymmPerLayerQuantization(NNAdapterOperandPrecisionCode type);
-bool IsSymmPerChannelQuantization(NNAdapterOperandPrecisionCode type);
-bool IsUInt8AsymmPerLayerQuantization(NNAdapterOperandPrecisionCode type);
-bool IsInt8SymmPerLayerQuantization(NNAdapterOperandPrecisionCode type);
-bool IsInt8SymmPerChannelQuantization(NNAdapterOperandPrecisionCode type);
-bool IsUInt32AsymmPerLayerQuantization(NNAdapterOperandPrecisionCode type);
-bool IsInt32SymmPerLayerQuantization(NNAdapterOperandPrecisionCode type);
-bool IsInt32SymmPerChannelQuantization(NNAdapterOperandPrecisionCode type);
+bool IsPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsPerChannelQuantType(NNAdapterOperandPrecisionCode type);
+bool IsAsymmetricQuantType(NNAdapterOperandPrecisionCode type);
+bool IsSymmetricQuantType(NNAdapterOperandPrecisionCode type);
+bool IsAsymmPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsSymmPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsSymmPerChannelQuantType(NNAdapterOperandPrecisionCode type);
+bool IsUInt8AsymmPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsInt8SymmPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsInt8SymmPerChannelQuantType(NNAdapterOperandPrecisionCode type);
+bool IsUInt16AsymmPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsInt16SymmPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsInt16SymmPerChannelQuantType(NNAdapterOperandPrecisionCode type);
+bool IsUInt32AsymmPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsInt32SymmPerLayerQuantType(NNAdapterOperandPrecisionCode type);
+bool IsInt32SymmPerChannelQuantType(NNAdapterOperandPrecisionCode type);
+int64_t GetOperandPrecisionDataLength(NNAdapterOperandPrecisionCode type);
+int64_t GetOperandTypeBufferLength(const NNAdapterOperandType& type);
+
+// Copy operand type under certain conditions
+void CopyOperandType(NNAdapterOperandType* dst_type,
+                     const NNAdapterOperandType& src_type);
+void CopyOperandTypeWithDimensions(NNAdapterOperandType* dst_type,
+                                   const NNAdapterOperandType& src_type);
+void CopyOperandTypeWithPrecision(NNAdapterOperandType* dst_type,
+                                  const NNAdapterOperandType& src_type);
+void CopyOperandTypeWithQuantParams(NNAdapterOperandType* dst_type,
+                                    const NNAdapterOperandType& src_type);
+void CopyOperandTypeExceptQuantParams(NNAdapterOperandType* dst_type,
+                                      const NNAdapterOperandType& src_type);
 
 // Caculate the production of the given dimensions
-int64_t ProductionOfDimensions(const int32_t* input_dimensions,
-                               uint32_t input_dimension_count);
+int64_t ProductionOfDimensions(const int32_t* input_dimensions_data,
+                               uint32_t input_dimensions_count);
 int64_t ProductionOfDimensions(const std::vector<int32_t>& input_dimensions);
 // Transpose the given dimensions, similar to numpy.transpose
 void TransposeDimensions(int32_t* input_dimensions,
                          const std::vector<int32_t>& permutation,
                          int32_t* output_dimensions_ptr = nullptr);
 // Reshape the given dimensions, similar to numpy.reshape
-void ReshapeDimensions(int32_t* input_dimensions,
-                       uint32_t* input_dimension_count,
+void ReshapeDimensions(int32_t* input_dimensions_data,
+                       uint32_t* input_dimensions_count,
                        const std::vector<int32_t>& dimensions,
-                       int32_t* output_dimensions_ptr = nullptr,
-                       uint32_t* output_dimension_count_ptr = nullptr);
+                       int32_t* output_dimensions_data_ptr = nullptr,
+                       uint32_t* output_dimensions_count_ptr = nullptr);
 
 // Initialize an identity dimorder vector from the given rank, such as (0, 1, 2,
 // 3) for rank=4
@@ -193,5 +211,11 @@ bool ReadFile(const std::string& path, std::vector<uint8_t>* buffer);
 
 // Write an uint8_t array to a file
 bool WriteFile(const std::string& path, const std::vector<uint8_t>& buffer);
+
+inline int64_t GetCurrentUS() {
+  struct timeval time;
+  gettimeofday(&time, NULL);
+  return 1000000LL * (int64_t)time.tv_sec + (int64_t)time.tv_usec;
+}
 
 }  // namespace nnadapter

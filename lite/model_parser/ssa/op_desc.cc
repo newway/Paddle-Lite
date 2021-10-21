@@ -40,6 +40,12 @@ OpDesc::OpDesc(const general::OpDesc& raw_desc,
                const RootVarScope& scope,
                int32_t block_idx)
     : OpDescBase{raw_desc} {
+  InitOpDesc(*raw_desc_, scope, block_idx);
+}
+
+void OpDesc::InitOpDesc(const general::OpDesc& raw_desc,
+                        const RootVarScope& scope,
+                        int32_t block_idx) {
   for (const auto& param : raw_desc.InputArgumentNames()) {
     for (const auto& var : raw_desc.inputs().at(param)) {
       auto root_var = scope.GetRootVarDesc(var).lock();
@@ -70,19 +76,55 @@ std::weak_ptr<VarDesc> OpDesc::AddOutput(const std::string& param,
   return var_desc;
 }
 
-constexpr char WriteBackOp::type_[];
-constexpr char WriteBackOp::input_lod_deps_[];
-constexpr char WriteBackOp::input_lod_array_deps_[];
-constexpr char WriteBackOp::input_src_[];
-constexpr char WriteBackOp::input_dst_[];
+void WriteToArrayOpDesc::ProcessTensorArrayOp(const general::OpDesc& raw_desc,
+                                              const RootVarScope& scope,
+                                              int32_t block_idx) {
+  CHECK_EQ(raw_desc.outputs().at("Out").size(), 1);
+  const auto& var_name = raw_desc.outputs().at("Out").at(0);
+
+  const std::string asso_var_name{var_name + ".AssociatedVar"};
+  CHECK(scope.HasRootVarDesc(asso_var_name));
+  auto root_var = scope.GetRootVarDesc(asso_var_name).lock();
+  const auto& var_desc = AddOutput("FakeAssociatedOut", root_var->latest());
+  UpdateVarBlockIdx(var_desc, block_idx);
+}
+
+void ReadFromArrayOpDesc::ProcessTensorArrayOp(const general::OpDesc& raw_desc,
+                                               const RootVarScope& scope,
+                                               int32_t block_idx) {
+  CHECK_EQ(raw_desc.inputs().at("X").size(), 1);
+  const auto& var_name = raw_desc.inputs().at("X").at(0);
+
+  const std::string asso_var_name{var_name + ".AssociatedVar"};
+  CHECK(scope.HasRootVarDesc(asso_var_name));
+  auto root_var = scope.GetRootVarDesc(asso_var_name).lock();
+  const auto& var_desc = AddInput("FakeAssociatedX", root_var->latest());
+  UpdateVarBlockIdx(var_desc, block_idx);
+}
+
+constexpr char const WriteBackOp::type_[];
+constexpr char const WriteBackOp::input_lod_deps_[];
+constexpr char const WriteBackOp::input_lod_array_deps_[];
+constexpr char const WriteBackOp::input_src_[];
+constexpr char const WriteBackOp::input_dst_[];
+constexpr char const WriteBackOp::input_src_array_[];
+constexpr char const WriteBackOp::input_dst_array_[];
 
 WriteBackOp::WriteBackOp(const std::weak_ptr<VarDesc>& src,
                          const std::weak_ptr<VarDesc>& dst,
-                         int32_t block_idx) {
-  CHECK(src.lock()->GetType() == VarDataType::LOD_TENSOR);
-  CHECK(dst.lock()->GetType() == VarDataType::LOD_TENSOR);
-  AddInput(input_src_, src, block_idx);
-  AddInput(input_dst_, dst, block_idx);
+                         int32_t block_idx,
+                         bool tensor_array_copy) {
+  if (!tensor_array_copy) {
+    CHECK(src.lock()->GetType() == VarDataType::LOD_TENSOR);
+    CHECK(dst.lock()->GetType() == VarDataType::LOD_TENSOR);
+    AddInput(input_src_, src, block_idx);
+    AddInput(input_dst_, dst, block_idx);
+  } else {
+    CHECK(src.lock()->GetType() == VarDataType::LOD_TENSOR_ARRAY);
+    CHECK(dst.lock()->GetType() == VarDataType::LOD_TENSOR_ARRAY);
+    AddInput(input_src_array_, src, block_idx);
+    AddInput(input_dst_array_, dst, block_idx);
+  }
   for (auto& op : dst.lock()->target_ops()) {
     for (auto& dep_var : ConvertToSet(op->outputs())) {
       if (dep_var.lock()->GetType() == VarDataType::LOD_TENSOR) {
@@ -103,6 +145,13 @@ void WriteBackOp::AddInput(const std::string& param,
                            int32_t block_idx) {
   inputs_[param].emplace_back(desc);
   UpdateVarBlockIdx(desc, block_idx);
+}
+
+std::vector<std::weak_ptr<VarDesc>> WriteBackOp::input_lod_deps() const {
+  if (inputs().count(input_lod_deps_)) {
+    return inputs().at(input_lod_deps_);
+  }
+  return {};
 }
 
 }  // namespace ssa

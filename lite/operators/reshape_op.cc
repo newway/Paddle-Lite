@@ -56,11 +56,12 @@ bool ReshapeOp::InferShapeImpl() const {
 }
 
 bool ReshapeOp::AttachImpl(const cpp::OpDesc &opdesc, lite::Scope *scope) {
-  AttachParam(&param_);
   param_.x =
       scope->FindVar(opdesc.Input("X").front())->GetMutable<lite::Tensor>();
+  CHECK(param_.x);
   param_.output =
       scope->FindVar(opdesc.Output("Out").front())->GetMutable<lite::Tensor>();
+  CHECK(param_.output);
 
   // prority: input(ShapeTensor) > input(Shape) > attr(shape)
   param_.shape_tensor_vct.clear();
@@ -117,6 +118,7 @@ bool Reshape2Op::AttachImpl(const cpp::OpDesc &opdesc, lite::Scope *scope) {
   ReshapeOp::AttachImpl(opdesc, scope);
   auto xshape_var = scope->FindVar(opdesc.Output("XShape").front());
   param_.xshape = xshape_var->GetMutable<lite::Tensor>();
+  CHECK(xshape_var);
   return true;
 }
 

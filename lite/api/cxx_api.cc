@@ -358,8 +358,12 @@ void Predictor::Build(const std::shared_ptr<cpp::ProgramDesc> &program_desc,
   }
 
   if (IsQuantizedMode(program_desc_)) {
-    inner_places.insert(inner_places.begin(),
-                        Place{TARGET(kARM), PRECISION(kInt8)});
+    for (auto &valid_place : valid_places) {
+      if (valid_place.target == TARGET(kARM)) {
+        inner_places.insert(inner_places.begin(),
+                            Place{TARGET(kARM), PRECISION(kInt8)});
+      }
+    }
   }
 
   Program program(program_desc_, scope_, inner_places);
@@ -374,6 +378,9 @@ void Predictor::Build(const std::shared_ptr<cpp::ProgramDesc> &program_desc,
 
   program_ =
       RunDefaultOptimizer(std::move(program), inner_places, factor, passes);
+
+  if (program_desc->HasVersion())
+    program_->set_version(program_desc->Version());
 
   PrepareFeedFetch();
   // Verify if the ops version of current runtime program is
@@ -502,10 +509,31 @@ void Predictor::CheckInputValid() {
     if (GetInput(idx)->precision() != input_precisions_[idx]) {
       LOG(WARNING) << " Error input tensor precision type. Input index (" << idx
                    << ") Tensor name (" << input_names_[idx]
-                   << ") Require Precision type ("
+                   << ") Require precision type ("
                    << PrecisionToStr(input_precisions_[idx])
-                   << ") Input Precision type ("
+                   << ") Input precision type ("
                    << PrecisionToStr(GetInput(idx)->precision()) << ").";
+    }
+  }
+}
+
+void Predictor::ClearTensorArray(
+    const std::shared_ptr<const cpp::ProgramDesc> &program_desc) {
+  for (size_t blk_idx = 0; blk_idx < program_desc->BlocksSize(); blk_idx++) {
+    const cpp::BlockDesc *block =
+        program_desc->GetBlock<cpp::BlockDesc>(blk_idx);
+    for (size_t var_idx = 0; var_idx < block->VarsSize(); var_idx++) {
+      const cpp::VarDesc *var = block->GetVar<cpp::VarDesc>(var_idx);
+      CHECK(var);
+
+      auto *var_ptr = program_->exec_scope()->FindVar(var->Name());
+      if (var_ptr->IsType<std::vector<Tensor>>() &&
+          (var->Name() != "feed" && var->Name() != "fetch")) {
+        std::vector<Tensor> *tensor_array_var =
+            program_->exec_scope()->FindMutableTensorList(var->Name());
+        CHECK(tensor_array_var);
+        tensor_array_var->clear();
+      }
     }
   }
 }

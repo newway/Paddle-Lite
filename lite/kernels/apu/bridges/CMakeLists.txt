@@ -1,23 +1,12 @@
-add_subgraph_bridge(SRCS act_op.cc
-                    concat_op.cc
-                    conv_op.cc
-                    conv_transpose_op.cc
-                    elementwise_ops.cc
-                    fc_op.cc
-                    graph.cc
-                    pool_op.cc
-                    softmax_op.cc
-                    utility.cc)
-
 if(NOT LITE_WITH_APU)
   return()
 endif()
 
 
-lite_cc_library(subgraph_bridge_utility_apu SRCS utility.cc DEPS tensor neuron_adapter)
+lite_cc_library(subgraph_bridge_utility_apu SRCS utility.cc DEPS core neuron_adapter)
 lite_cc_library(subgraph_bridge_graph_apu SRCS graph.cc DEPS subgraph_bridge_utility_apu)
 
-set(apu_subgraph_bridge_deps subgraph_bridge_registry subgraph_bridge_utility_apu subgraph_bridge_graph_apu)
+set(apu_subgraph_bridge_deps core subgraph_bridge_utility_apu subgraph_bridge_graph_apu)
 
 lite_cc_library(subgraph_bridge_conv_op_apu SRCS conv_op.cc DEPS ${apu_subgraph_bridge_deps})
 lite_cc_library(subgraph_bridge_elementwise_ops_apu SRCS elementwise_ops.cc DEPS ${apu_subgraph_bridge_deps})
@@ -30,7 +19,7 @@ lite_cc_library(subgraph_bridge_conv_transpose_op_apu SRCS conv_transpose_op.cc 
 
 
 set(apu_subgraph_bridges
-        subgraph_bridge_registry
+        core
         subgraph_bridge_utility_apu
         subgraph_bridge_conv_op_apu
         subgraph_bridge_elementwise_ops_apu

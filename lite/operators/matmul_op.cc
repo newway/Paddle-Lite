@@ -101,8 +101,9 @@ bool MatMulOpLite::InferShapeImpl() const {
     } else {
       dim_out_vec[1] = y_dims[1];
     }
-  } else if (x_dims.size() > 2 && y_dims.size() == 1) {
-    // x: [B, M, K], y: [K], out: [B, M]
+  } else if (x_dims.size() >= 2 && y_dims.size() == 1) {
+    // x: [B, M, K], y: [K], out: [B, M] or
+    // x: [B, K], y: [K], out [B]
     dim_out_vec.resize(x_dims.size() - 1);
     for (size_t i = 0; i < dim_out_vec.size(); ++i) {
       dim_out_vec[i] = x_dims[i];
@@ -132,7 +133,6 @@ bool MatMulOpLite::InferShapeImpl() const {
 }
 
 bool MatMulOpLite::AttachImpl(const cpp::OpDesc &op_desc, lite::Scope *scope) {
-  AttachParam(&param_);
   CHECK(!op_desc.Input("X").empty());
   CHECK(!op_desc.Input("Y").empty());
   CHECK(!op_desc.Output("Out").empty());

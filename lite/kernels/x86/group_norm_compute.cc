@@ -15,7 +15,7 @@
 #include "lite/kernels/x86/group_norm_compute.h"
 #include <immintrin.h>
 #include <cmath>
-#include "lite/backends/x86/math/group_norm.h"
+#include "lite/backends/x86/math/avx/group_norm.h"
 #include "lite/core/op_registry.h"
 #include "lite/core/type_system.h"
 
@@ -73,6 +73,8 @@ REGISTER_LITE_KERNEL(group_norm,
     .BindInput("Scale", {LiteType::GetTensorTy(TARGET(kX86))})
     .BindInput("Bias", {LiteType::GetTensorTy(TARGET(kX86))})
     .BindOutput("Y", {LiteType::GetTensorTy(TARGET(kX86))})
+    .BindOutput("Mean", {LiteType::GetTensorTy(TARGET(kX86))})
+    .BindOutput("Variance", {LiteType::GetTensorTy(TARGET(kX86))})
     .BindOutput("SavedMean", {LiteType::GetTensorTy(TARGET(kX86))})
     .BindOutput("SavedVariance", {LiteType::GetTensorTy(TARGET(kX86))})
     .Finalize();

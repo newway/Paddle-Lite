@@ -31,8 +31,7 @@ Paddle-Lite 的架构尝试从强类型推导的角度建模支持多硬件，�
 
 ### OpLite
 
-[OpLite](https://github.com/PaddlePaddle/Paddle-Lite/blob/v2.0.0-beta1-prerel/lite/core/op_lite.h#L52) 是 Paddle-Lite 中的 Operator，用户扩展单个硬件时，最多的就是扩展 Op 和 Kernel。
-
+[OpLite](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/op_lite.h#L54) 是 Paddle-Lite 中的 Operator，用户扩展单个硬件时，最多的就是扩展 Op 和 Kernel。
 重要方法如下：
 
 ```c++
@@ -42,13 +41,21 @@ class OpLite : public Registry {
   virtual bool CheckShape() const { return true; }
   // Inference the outputs' shape.
   virtual bool InferShape() const { return true; }
-  // Link the external execution environ to internal context.
-  bool AttachImpl(const cpp::OpDesc &opdesc, lite::Scope *scope);
+  virtual bool InferShape();
+  // Infer the outputs's data type during opt period
+  virtual bool InferType() {return false};
+  // Run this operator.
+  virtual bool Run();
+  // Indicate whether the Op runs only once or not
+  virtual bool run_once() const { return false; }
+  // Attach it with the runtime environment.
+  virtual bool AttachImpl(const cpp::OpDesc &opdesc, lite::Scope *scope) = 0;
 };
 ```
 
 其中，分析期执行
 
+- `InferType`
 - `AttachImpl`
 
 执行期执行
@@ -83,7 +90,7 @@ class OpLite : public Registry {
 
 ### OpParam
 
-[OpParam](https://github.com/PaddlePaddle/Paddle-Lite/blob/v2.0.0-beta1-prerel/lite/operators/op_params.h) 用于存储执行期 Kernel 需要的各项参数。 所有字段可以直接存储（比如指针或者 `int`），以避免执行中获取参数的延迟。
+[OpParam](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/operators/op_params.h) 用于存储执行期 Kernel 需要的各项参数。 所有字段可以直接存储（比如指针或者 `int`），以避免执行中获取参数的延迟。
 
 因为没有需求，OpParam 暂时没有设置基类。
 
@@ -125,7 +132,7 @@ class KernelLite : public KernelBase {
 };
 ```
 
-由于是执行期的重要概念，因此 Kernel 设计地非常简单高效。 
+[Kernel](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/kernel.h)是执行期的重要概念，因此设计地非常简单高效。 
 
 其中，执行期的 `Run` 是其唯一重要的接口，其中包含具体的计算逻辑。
 
@@ -167,21 +174,21 @@ Kernel自身定义是 `kARM` 的，也就是ARM上的kernel，主要的计算精
 
 ### MIR
 
-MIR 类似于 LLVM 里的 IR，只是加上了硬件和执行期的信息参与分析优化。
+[MIR](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/op_lite.h#L38) 类似于 LLVM 里的 IR，只是加上了硬件和执行期的信息参与分析优化。
 
 Pass 是MIR中的模块化策略，其输入和输出都是 SSA Graph.
 
-框架会自动基于模型的Program 构建 SSA Graph，之后按 [Optimizer](https://github.com/PaddlePaddle/Paddle-Lite/blob/v2.0.0-beta1-prerel/lite/core/optimizer.h) 中定义的pass的顺序调用一系列 Pass。
+框架会自动基于模型的Program 构建 SSA Graph，之后按 [Optimizer](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/optimizer/optimizer.h) 中定义的pass的顺序调用一系列 Pass。
 
 #### Op Fusion
 
-MIR 中的 [PatternMacher](https://github.com/PaddlePaddle/Paddle-Lite/blob/v2.0.0-beta1-prerel/lite/core/mir/pattern_matcher.h) 实现了简单有效的基于图的模板识别的算法，相关的 op fusion 的图操作可以基于此实现。
+MIR 中的 [PatternMacher](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/optimizer/mir/pattern_matcher.h) 实现了简单有效的基于图的模板识别的算法，相关的 op fusion 的图操作可以基于此实现。
 
-实际的例子可以参考 [fc_fuse_pass.h](https://github.com/PaddlePaddle/Paddle-Lite/blob/v2.0.0-beta1-prerel/lite/core/mir/fusion/fc_fuse_pass.h)。
+实际的例子可以参考 [fc_fuse_pass.h](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/optimizer/mir/fusion/fc_fuse_pass.h)。
 
 ### TypeSystem
 
-TypeSystem 是 Paddle-Lite 中构建复杂计算图的基础模块，核心思想是协助 SSA Graph 构建一个状态机，表示其中不同的状态。
+[TypeSystem](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/type_system.h) 是 Paddle-Lite 中构建复杂计算图的基础模块，核心思想是协助 SSA Graph 构建一个状态机，表示其中不同的状态。
 
 这里的 Type 主要包含下面四组信息，更多的信息可以按需扩展：
 
@@ -206,7 +213,7 @@ Tensor0(kARM, kFloat, kNCHW) --pass-> IoCopyOp(kARM, kOpenCL) --pass-> Tensor1(k
 
 ### KernelContext
 
-KernelContext 是硬件支持的核心封装，主要用于为 Kernel 提供执行期的硬件上下文。
+[KernelContext](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/context.h#L632) 是硬件支持的核心封装，主要用于为 Kernel 提供执行期的硬件上下文。
 
 KernelContext 的设计类似于 OpParam，两者均没有基类；对于 KernelContext，其假定是，不同的硬件间的接口和逻辑可能完全不同，比如 kARM 和 kCUDA，因此不设定基类，也不需要提供统一的接口来封装不同硬件行为。
 
@@ -225,21 +232,21 @@ KernelContext 的行为可以被 MIR 在分析期确定和调度。
 
 主要是扩充 Op 和 Kernel 的工作，如果需要 fuse，则参考 MIR 章节，增加相应的fuse pass便可，具体地，可以参考
 
-- [fc_op](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/operators/fc_op.h) 实现类似的 Op
-- [fc_compute](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/kernels/arm/fc_compute.h) 实现类似的 Kernel
-- [fc_fuse_pass](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/core/mir/fusion/fc_fuse_pass.h) 实现fuse逻辑，并注册到 [optimizer](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/core/optimizer.h)
+- [fc_op](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/operators/fc_op.h) 实现类似的 Op
+- [fc_compute](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/kernels/arm/fc_compute.h) 实现类似的 Kernel
+- [fc_fuse_pass](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/optimizer/mir/fusion/fc_fuse_pass.h) 实现fuse逻辑，并注册到 [optimizer](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/optimizer/optimizer.h)
 
 ### 扩展全新硬件后端
 
 需要额外扩充如下模块，让框架能够支撑硬件执行：
 
 - TypeSystem，需要扩充其中相关的 type
-  - 相关 [enum](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/api/paddle_place.h#L44)
+  - 相关 [enum](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/api/paddle_place.h#L45)
 - MIR，需要扩展其中的 type cast 相关的 pass
-  - [TargetType cast pass](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/core/mir/type_target_cast_pass.cc) 用于拷贝不同硬件上的tensor
-  - [Data layout cast pass](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/core/mir/type_target_cast_pass.h) 用于转化不同的 data layout
-  - [Precision cast pass](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/core/mir/type_precision_cast_pass.h) 用于转化不同 tensor 的量化精度
+  - [TargetType cast pass](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/optimizer/mir/type_target_cast_pass.cc) 用于拷贝不同硬件上的tensor
+  - [Data layout cast pass](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/optimizer/mir/type_target_cast_pass.h) 用于转化不同的 data layout
+  - [Precision cast pass](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/optimizer/mir/type_precision_cast_pass.h) 用于转化不同 tensor 的量化精度
 - KernelContext，具体地可以参考
-  - [ARM context](https://github.com/PaddlePaddle/Paddle-Lite/blob/release/v2.0.0-beta1/lite/core/context.h#L91)
+  - [ARM context](https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/lite/core/context.h#L413)
   - 需要注意的是，硬件 context 的接口只服务于该硬件的 kernel
   - context 有分析期和执行期两个阶段，如果分析期没有特殊的优化，则无需考虑；否则，需要注意将分析期的信息整理并序列化到离线模型中，用于执行期直接加载。

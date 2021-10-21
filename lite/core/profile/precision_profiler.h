@@ -31,7 +31,7 @@
 #include "lite/core/program.h"
 #include "lite/utils/io.h"
 #ifdef LITE_WITH_X86
-#include "lite/fluid/float16.h"
+#include "lite/backends/x86/fluid/float16.h"
 #endif
 
 #ifdef LITE_WITH_OPENCL
@@ -277,9 +277,11 @@ class PrecisionProfiler {
         }
 #endif
         case PRECISION(kBool): {
-          *mean = -333333333333;
-          *std_dev = -33333333333;
-          *ave_grow_rate = -33333333333;
+          auto ptr = in->data<bool>();
+          *mean = compute_mean<bool>(ptr, in->numel());
+          *std_dev =
+              compute_standard_deviation<bool>(ptr, in->numel(), true, *mean);
+          *ave_grow_rate = compute_average_grow_rate<bool>(ptr, in->numel());
           if (write_result_to_file) {
             write_tensorfile<bool>(in, name, log_dir_);
           }
@@ -333,12 +335,9 @@ class PrecisionProfiler {
       CLRuntime::Global()->command_queue().finish();
       switch (layout_type) {
         case DATALAYOUT(kImageDefault): {
+          auto in_dims = in->dims();
           paddle::lite::CLImageConverterDefault default_convertor;
-          auto image_shape = default_convertor.InitImageDimInfoWith(in->dims());
-          if (op_name == "fc" || op_name == "softmax") {
-            image_shape = DDim(std::vector<DDim::value_type>(
-                {in->dims()[1] / 4, in->dims()[0]}));
-          }
+          auto image_shape = default_convertor.InitImageDimInfoWith(in_dims);
           size_t im_w = image_shape[0];
           size_t im_h = image_shape[1];
           VLOG(1) << "image shape(W,H) of " << name << ": " << im_w << " "
@@ -361,11 +360,8 @@ class PrecisionProfiler {
                                       cl_image2d_row_pitch,
                                       cl_image2d_slice_pitch,
                                       IoDirection::DtoH);
-          // TODO(zhaoyang-star): Tensor shape padding mode will change from
-          // high-dim padding to low-dim padding to fit image2d.
-          // ImageConverter will be changed.
           default_convertor.ImageToNCHW(
-              in_data_v, real_out_v.data(), image_shape, in->dims());
+              in_data_v, real_out_v.data(), image_shape, in_dims);
           CHECK(real_out_v.size() == in->numel());
           *mean = compute_mean<float>(real_out_v.data(), real_out_v.size());
           *std_dev = compute_standard_deviation<float>(
@@ -373,7 +369,52 @@ class PrecisionProfiler {
           *ave_grow_rate = compute_average_grow_rate<float>(real_out_v.data(),
                                                             real_out_v.size());
           std::shared_ptr<lite::Tensor> real_out_t(new lite::Tensor);
-          real_out_t->Resize(in->dims());
+          real_out_t->Resize(in_dims);
+          float* real_out_data = real_out_t->mutable_data<float>();
+          memcpy(real_out_data,
+                 real_out_v.data(),
+                 real_out_v.size() * sizeof(float));
+          if (write_result_to_file) {
+            write_tensorfile<float>(real_out_t.get(), name, log_dir_);
+          }
+          return;
+        }
+        case DATALAYOUT(kImageFolder): {
+          auto in_dims = in->dims();
+          paddle::lite::CLImageConverterFolder folder_convertor;
+          auto image_shape = folder_convertor.InitImageDimInfoWith(in_dims);
+          size_t im_w = image_shape[0];
+          size_t im_h = image_shape[1];
+          VLOG(1) << "image shape(W,H) of " << name << ": " << im_w << " "
+                  << im_h;
+          auto* in_data_v =
+              use_fp16
+                  ? static_cast<void*>(
+                        calloc(im_w * im_h * 4, sizeof(uint16_t)))
+                  : static_cast<void*>(calloc(im_w * im_h * 4, sizeof(float)));
+
+          std::vector<float> real_out_v(in->numel());
+          const size_t cl_image2d_row_pitch{0};
+          const size_t cl_image2d_slice_pitch{0};
+          TargetWrapperCL::ImgcpySync(in_data_v,
+                                      use_fp16
+                                          ? in->data<uint16_t, cl::Image2D>()
+                                          : in->data<float, cl::Image2D>(),
+                                      im_w,
+                                      im_h,
+                                      cl_image2d_row_pitch,
+                                      cl_image2d_slice_pitch,
+                                      IoDirection::DtoH);
+          folder_convertor.ImageToNCHW(
+              in_data_v, real_out_v.data(), image_shape, in_dims);
+          CHECK(real_out_v.size() == in->numel());
+          *mean = compute_mean<float>(real_out_v.data(), real_out_v.size());
+          *std_dev = compute_standard_deviation<float>(
+              real_out_v.data(), in->numel(), true, *mean);
+          *ave_grow_rate = compute_average_grow_rate<float>(real_out_v.data(),
+                                                            real_out_v.size());
+          std::shared_ptr<lite::Tensor> real_out_t(new lite::Tensor);
+          real_out_t->Resize(in_dims);
           float* real_out_data = real_out_t->mutable_data<float>();
           memcpy(real_out_data,
                  real_out_v.data(),
@@ -536,8 +577,8 @@ class PrecisionProfiler {
         std::string out_arg_name;
         op->op_info()->GetOutputArgname(out_name, &out_arg_name);
         auto type = kernel->GetOutputDeclType(out_arg_name);
-
-        if (type->IsTensor()) {
+        auto tmp = op_scope->FindVar(out_name);
+        if (tmp->IsType<Tensor>()) {
           const Tensor* tout =
               op_scope->FindVar(out_name)->GetMutable<Tensor>();
           double mean = -999999;
@@ -574,7 +615,7 @@ class PrecisionProfiler {
              << " " << setw(15) << left << mean_str << " " << setw(15) << left
              << std_dev_str << " " << setw(15) << left << ave_grow_rate_str
              << std::endl;
-        } else if (type->IsTensorList()) {
+        } else if (tmp->IsType<std::vector<Tensor>>()) {
           auto touts =
               op_scope->FindVar(out_name)->GetMutable<std::vector<Tensor>>();
           for (auto t : *touts) {

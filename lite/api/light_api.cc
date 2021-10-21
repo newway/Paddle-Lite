@@ -40,7 +40,6 @@ void LightPredictor::Build(const std::string& lite_model_file,
 #endif
   BuildRuntimeProgram(program_desc_);
   PrepareFeedFetch();
-  program_desc_.reset();
 }
 
 void LightPredictor::Build(const std::string& model_dir,
@@ -247,7 +246,20 @@ void LightPredictor::DequantizeWeight() {
         auto input_names = op_desc->input_vars();
         for (auto& input_name : input_names) {
           std::string input_scale_name = input_name + "_quant_scale";
-          if (op_desc->HasAttr(input_scale_name)) {  // the input is quantized
+          size_t found = input_name.find("/target_trans");
+          std::string input_scale_name_alias = "";
+          if (found != std::string::npos) {
+            input_scale_name_alias =
+                input_name.substr(0, found) + "_quant_scale";
+          }
+          if (op_desc->HasAttr(input_scale_name) ||
+              (!input_scale_name_alias.empty() &&
+               op_desc->HasAttr(
+                   input_scale_name_alias))) {  // the input is quantized
+            if (!input_scale_name_alias.empty()) {
+              input_scale_name = input_scale_name_alias;
+              input_name = input_name.substr(0, found);
+            }
             auto input_tensor =
                 scope_->FindVar(input_name)->GetMutable<lite::Tensor>();
             tmp_tensor.CopyDataFrom(*input_tensor);
@@ -342,9 +354,9 @@ void LightPredictor::CheckInputValid() {
     if (GetInput(idx)->precision() != input_precisions_[idx]) {
       LOG(WARNING) << " Error input tensor precision type. Input index (" << idx
                    << ") Tensor name (" << input_names_[idx]
-                   << ") Require Precision type ("
+                   << ") Require precision type ("
                    << PrecisionToStr(input_precisions_[idx])
-                   << ") Input Precision type ("
+                   << ") Input precision type ("
                    << PrecisionToStr(GetInput(idx)->precision()) << ").";
     }
   }
@@ -380,6 +392,25 @@ bool LightPredictor::TryShrinkMemory() {
   }
   return true;
 }
+void LightPredictor::ClearTensorArray(
+    const std::shared_ptr<const cpp::ProgramDesc>& program_desc) {
+  for (size_t blk_idx = 0; blk_idx < program_desc->BlocksSize(); blk_idx++) {
+    const cpp::BlockDesc* block =
+        program_desc->GetBlock<cpp::BlockDesc>(blk_idx);
+    for (size_t var_idx = 0; var_idx < block->VarsSize(); var_idx++) {
+      const cpp::VarDesc* var = block->GetVar<cpp::VarDesc>(var_idx);
+      CHECK(var);
 
+      auto* var_ptr = program_->exec_scope()->FindVar(var->Name());
+      if (var_ptr->IsType<std::vector<Tensor>>() &&
+          (var->Name() != "feed" && var->Name() != "fetch")) {
+        std::vector<Tensor>* tensor_array_var =
+            program_->exec_scope()->FindMutableTensorList(var->Name());
+        CHECK(tensor_array_var);
+        tensor_array_var->clear();
+      }
+    }
+  }
+}
 }  // namespace lite
 }  // namespace paddle

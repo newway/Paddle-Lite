@@ -1,4 +1,4 @@
-// Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -44,6 +44,12 @@ void MatMulImageCompute::PrepareForRun() {
 }
 
 void MatMulImageCompute::Run() {
+    @autoreleasepool {
+        run_without_mps();
+    }
+}
+
+void MatMulImageCompute::run_without_mps() {
     auto pipline = pipline_;
     auto outTexture = output_buffer_->image();
     auto backend = (__bridge MetalContextImp*)metal_context_->backend();
@@ -60,13 +66,11 @@ void MatMulImageCompute::Run() {
 void MatMulImageCompute::setup_without_mps() {
     auto valid = false;
     if (input_buffer_y_->tensor_dim_.size() == 4) {
-        
     } else if (input_buffer_y_->tensor_dim_.size() == 3) {
-        
     } else {
         // tensor.size = 1, 2
-        if(input_buffer_x_->dim_[0] == 1 &&
-           input_buffer_x_->dim_[1] == 1 && input_buffer_x_->dim_[2] == 1) {
+        if (input_buffer_x_->dim_[0] == 1 && input_buffer_x_->dim_[1] == 1 &&
+            input_buffer_x_->dim_[2] == 1) {
             valid = true;
         }
     }

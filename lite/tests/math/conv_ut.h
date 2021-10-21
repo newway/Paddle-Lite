@@ -29,6 +29,8 @@
 #ifdef ENABLE_ARM_FP16
 typedef __fp16 float16_t;
 #endif
+#else
+#include "lite/kernels/x86/conv_compute.h"
 #endif  // LITE_WITH_ARM
 
 DEFINE_int32(power_mode,
@@ -109,7 +111,10 @@ void act_init(ConvParam& param,  // NOLINT
               const int group,
               const int flag_act,
               const float six,
-              const float leakey_relu_scale) {
+              const float leakey_relu_scale,
+              const float scale = 6.f,
+              const float offset = 3.f,
+              const float threshold = 6.f) {
   param.strides = strides;
   param.paddings = std::make_shared<std::vector<int>>(pads);
   param.dilations = std::make_shared<std::vector<int>>(dilas);
@@ -125,6 +130,10 @@ void act_init(ConvParam& param,  // NOLINT
       act_param.Relu_clipped_coef = six;
     } else if (flag_act == 4) {
       act_param.Leaky_relu_alpha = leakey_relu_scale;
+    } else if (flag_act == 10) {
+      act_param.hard_swish_scale = scale;
+      act_param.hard_swish_offset = offset;
+      act_param.hard_swish_threshold = threshold;
     }
     param.activation_param = act_param;
   }
