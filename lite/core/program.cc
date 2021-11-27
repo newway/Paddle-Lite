@@ -699,7 +699,122 @@ void Instruction::Run() {
   op_->InferShape();
   kernel_->Launch();
   has_run_ = true;
-
+// #define DEBUG_XPU_OP
+#ifdef DEBUG_XPU_OP
+  // <op, output>
+  static const std::map<std::string, std::vector<std::string>> debug_ops = {
+      // null value means all output
+      {"fc", {}},
+      {"tanh", {}},
+      {"relu", {}},
+      {"scale", {}},
+      {"stack", {}},
+      {"__xpu__embedding_with_eltwise_add", {}},
+      {"softmax", {}},
+      {"transpose2", {}},
+      {"elementwise_add", {}},
+      {"slice", {}},
+      {"fill_constant", {}},
+      {"concat", {}},
+      {"shape", {}},
+      {"reshape2", {}},
+      {"squeeze2", {}},
+      {"__xpu__fc", {"Output", "OutputMax"}},
+      {"__xpu__multi_encoder", {"Output"}},
+      {"layer_norm", {"Y"}},
+      {"conv", {"Out"}},
+      {"__xpu__conv2d", {"Output", "OutputMax"}},
+      {"matmul", {"Out"}}};
+  // tensor to dump all value
+  static const std::set<std::string> dump_tensors = {/*"shape_1.tmp_0"*/};
+  auto op_type = op_->Type();
+  VLOG(3) << "kernel summary: " << kernel_->summary();
+  auto search = debug_ops.find(op_type);
+  if (search != debug_ops.end()) {
+    if (kernel_->summary().find(":xpu") != std::string::npos) {
+      XPU_CALL(xpu_wait());
+    }
+    auto out_argnames = search->second.empty()
+                            ? op_->op_info()->output_argnames()
+                            : search->second;
+    // std::cout << "out arguments size:" << out_argnames.size() << ", first "
+    // << out_argnames[0] << std::endl;
+    for (auto arg_name : out_argnames) {
+      auto out_name = op_->op_info()->Output(arg_name)[0];
+      VLOG(3) << op_type << " " << arg_name << " :" << out_name;
+      auto* pout = op_->scope()->FindTensor(out_name);
+      CHECK(pout != nullptr) << "find tensor failed: " << out_name;
+      std::unique_ptr<int8_t> cpu_out(new int8_t[8 * pout->numel()]);
+      int8_t* pdata = const_cast<int8_t*>(pout->data<int8_t>());
+      if (TargetToStr(pout->target()) == "xpu") {
+        CHECK_LE(PrecisionTypeLength(pout->precision()), 8)
+            << " buffer not enough";
+        XPU_CALL(
+            xpu_memcpy(cpu_out.get(),
+                       pout->data<int8_t>(),
+                       pout->numel() * PrecisionTypeLength(pout->precision()),
+                       XPU_DEVICE_TO_HOST));
+        pdata = cpu_out.get();
+      }
+      double sum = 0.f;
+      const int P_NUM = 8;  // print value count
+      const int P_STRIDE =
+          (pout->numel() / P_NUM > 0) ? (pout->numel() / P_NUM) : 1;
+      for (int i = 0; i < pout->numel(); ++i) {
+        double delta = 0.f;
+        switch (pout->precision()) {
+          case PrecisionType::kFloat: {
+            float* pfloat = reinterpret_cast<float*>(pdata);
+            delta = pfloat[i];
+            break;
+          }
+          case PrecisionType::kUInt8: {
+            delta = static_cast<uint8_t>(pdata[i]);
+            break;
+          }
+          case PrecisionType::kInt8: {
+            delta = static_cast<int8_t>(pdata[i]);
+            break;
+          }
+          case PrecisionType::kInt32: {
+            int32_t* pInt32 = reinterpret_cast<int32_t*>(pdata);
+            delta = pInt32[i];
+            break;
+          }
+          case PrecisionType::kInt64: {
+            int64_t* pInt64 = reinterpret_cast<int64_t*>(pdata);
+            delta = pInt64[i];
+            break;
+          }
+          case PrecisionType::kInt16: {
+            int16_t* pInt16 = reinterpret_cast<int16_t*>(pdata);
+            delta = pInt16[i];
+            break;
+          }
+          case PrecisionType::kFP16: {
+            float16* pfp16 = reinterpret_cast<float16*>(pdata);
+            delta = pfp16[i];
+            break;
+          }
+          case PrecisionType::kFP64: {
+            double* pfp64 = reinterpret_cast<double*>(pdata);
+            delta = pfp64[i];
+            break;
+          }
+          default:
+            CHECK(0) << "unsupport Type sum";
+            break;
+        }
+        sum += delta;
+        if ((dump_tensors.find(out_name) != dump_tensors.end()) ||
+            ((i % P_STRIDE) == 0) || (i == (pout->numel() - 1))) {
+          VLOG(3) << i << ": " << delta;
+        }
+      }
+      VLOG(3) << op_type << " numel:" << pout->numel() << ", sum: " << sum;
+    }
+  }
+#endif
 #ifdef LITE_WITH_PROFILE
   if (first_epoch_for_profiler_) {
     kernel_->SetIsKernelTest(false);
