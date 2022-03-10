@@ -1,6 +1,5 @@
 include(lite)
 
-message(STATUS "LIGHT_FRAMEWORK:\t${LITE_WITH_LIGHT_WEIGHT_FRAMEWORK}")
 message(STATUS "LITE_WITH_CUDA:\t${LITE_WITH_CUDA}")
 message(STATUS "LITE_WITH_X86:\t${LITE_WITH_X86}")
 message(STATUS "LITE_WITH_ARM:\t${LITE_WITH_ARM}")
@@ -8,21 +7,17 @@ message(STATUS "LITE_WITH_SW:\t${LITE_WITH_SW}")
 message(STATUS "LITE_WITH_OPENCL:\t${LITE_WITH_OPENCL}")
 message(STATUS "LITE_WITH_METAL:\t${LITE_WITH_METAL}")
 message(STATUS "LITE_WITH_NPU:\t${LITE_WITH_NPU}")
-message(STATUS "LITE_WITH_RKNPU:\t${LITE_WITH_RKNPU}")
 message(STATUS "LITE_WITH_XPU:\t${LITE_WITH_XPU}")
-message(STATUS "LITE_WITH_APU:\t${LITE_WITH_APU}")
-message(STATUS "LITE_WITH_XTCL:\t${LITE_WITH_XTCL}")
 message(STATUS "LITE_WITH_FPGA:\t${LITE_WITH_FPGA}")
 message(STATUS "LITE_WITH_INTEL_FPGA:\t${LITE_WITH_INTEL_FPGA}")
 message(STATUS "LITE_WITH_MLU:\t${LITE_WITH_MLU}")
-message(STATUS "LITE_WITH_HUAWEI_ASCEND_NPU:\t${LITE_WITH_HUAWEI_ASCEND_NPU}")
 message(STATUS "LITE_WITH_BM:\t${LITE_WITH_BM}")
 message(STATUS "LITE_WITH_NNADAPTER:\t${LITE_WITH_NNADAPTER}")
 message(STATUS "LITE_WITH_PROFILE:\t${LITE_WITH_PROFILE}")
 message(STATUS "LITE_WITH_CV:\t${LITE_WITH_CV}")
 
 set(LITE_MODEL_DIR "${THIRD_PARTY_PATH}/install")
-set(LITE_ON_MOBILE ${LITE_WITH_LIGHT_WEIGHT_FRAMEWORK})
+set(LITE_ON_MOBILE ${LITE_WITH_ARM})
 
 add_subdirectory(backends)
 add_subdirectory(utils)
@@ -54,25 +49,85 @@ if (WITH_TESTING)
     lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "resnet50_int8_per_layer.tar.gz")
     lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ssd_mobilenet_v1_relu_voc_fp32_300.tar.gz")
     lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ssd_mobilenet_v1_relu_voc_int8_300_per_layer.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "AlexNet_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "DenseNet121_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "GoogLeNet_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "EfficientNetB0_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "InceptionV3_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "InceptionV4_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "MobileNetV1_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "MobileNetV2_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "MobileNetV3_large_x1_0_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "MobileNetV3_small_x1_0_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ResNet18_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ResNet50_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ResNet101_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ResNeXt50_32x4d_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ShuffleNetV2_x1_0_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "SqueezeNet1_0_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "VGG16_v2_0.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "VGG19_v2_0.tar.gz")
-    if(LITE_WITH_LIGHT_WEIGHT_FRAMEWORK)
+    if (LITE_WITH_NNADAPTER)
+        set(LITE_URL_FOR_NNADAPTER_UNITTESTS "http://paddlelite-demo.bj.bcebos.com/NNAdapter/models")
+        # PaddleClas
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "AlexNet_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "DenseNet121_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "GoogLeNet_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "EfficientNetB0_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "InceptionV3_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "InceptionV4_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "MobileNetV1_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "MobileNetV2_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "MobileNetV3_large_x1_0_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "MobileNetV3_small_x1_0_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ResNet18_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ResNet50_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ResNet101_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ResNeXt50_32x4d_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ShuffleNetV2_x1_0_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "SqueezeNet1_0_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "VGG16_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "VGG19_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "DarkNet53.tar.gz"             MODEL_PATH "PaddleClas/v2.3/DarkNet")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "DeiT_base_patch16_224.tar.gz" MODEL_PATH "PaddleClas/v2.3/DeiT")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "DPN68.tar.gz"                 MODEL_PATH "PaddleClas/v2.3/DPN")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "GhostNet_x1_0.tar.gz"         MODEL_PATH "PaddleClas/v2.3/GhostNet")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "HRNet_W18_C.tar.gz"           MODEL_PATH "PaddleClas/v2.3/HRNet")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "PPLCNet_x0_25.tar.gz"         MODEL_PATH "PaddleClas/v2.3/PPLCNet")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "Res2Net50_26w_4s.tar.gz"      MODEL_PATH "PaddleClas/v2.3/Res2Net")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "SE_ResNet50_vd.tar.gz"        MODEL_PATH "PaddleClas/v2.3/SENet")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ViT_base_patch16_224.tar.gz"  MODEL_PATH "PaddleClas/v2.3/VisionTransformer")
+        # PaddleDetection
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ssd_mobilenet_v1_relu_voc_v2_2.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ssd_vgg16_voc_v2_2.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "yolov3_darknet53_coco_v2_2.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "yolov3_mobilenet_v1_coco_v2_2.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "yolov3_mobilenet_v3_large_coco_v2_2.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "yolov3_r50vd_dcn_coco_v2_2.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "yolov4_cspdarknet_coco_v1_8.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ppyolo_r50vd_dcn_1x_coco_v2_2.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "higherhrnet_hrnet_w32_640_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "hrnet_w32_384x288_v2_0.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "picodet_m_416_coco.tar.gz"           MODEL_PATH "PaddleDetection/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ppyolo_mbv3_large_coco.tar.gz"       MODEL_PATH "PaddleDetection/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ppyolo_r50vd_dcn_1x_coco.tar.gz"     MODEL_PATH "PaddleDetection/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ppyolo_tiny_650e_coco.tar.gz"        MODEL_PATH "PaddleDetection/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ppyolov2_r50vd_dcn_365e_coco.tar.gz" MODEL_PATH "PaddleDetection/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "tinypose_128x96.tar.gz"              MODEL_PATH "PaddleDetection/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ssdlite_mobilenet_v3_small.tar.gz"   MODEL_PATH "PaddleDetection/static")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ssdlite_mobilenet_v3_large.tar.gz"   MODEL_PATH "PaddleDetection/static")
+        # PaddleSeg
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "bisenet.tar.gz"   MODEL_PATH "PaddleSeg/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "segformer.tar.gz" MODEL_PATH "PaddleSeg/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "stdcseg.tar.gz"   MODEL_PATH "PaddleSeg/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "unet_cityscapes_1024x512_160k.tar.gz"                   MODEL_PATH "PaddleSeg/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "deeplabv3p_resnet50_os8_cityscapes_1024x512_80k.tar.gz" MODEL_PATH "PaddleSeg/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "pphumanseg_lite_generic_192x192_with_softmax.tar.gz"    MODEL_PATH "PaddleSeg/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "deeplabv3p_resnet50_os8_humanseg_512x512_100k_with_softmax.tar.gz" MODEL_PATH "PaddleSeg/v2.3")
+        # PaddleOCR
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "rec_crnn_mv3_ctc.tar.gz"               MODEL_PATH "PaddleOCR")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ch_ppocr_mobile_v2_0_rec_v2_0.tar.gz"  MODEL_PATH "PaddleOCR/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ch_ppocr_mobile_v2_0_det_v2_0.tar.gz"  MODEL_PATH "PaddleOCR/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ch_ppocr_server_v2.0_rec_infer.tar.gz" MODEL_PATH "PaddleOCR/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ch_ppocr_server_v2.0_det_infer.tar.gz" MODEL_PATH "PaddleOCR/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ch_PP-OCRv2_det_infer.tar.gz"          MODEL_PATH "PaddleOCR/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ch_PP-OCRv2_rec_infer.tar.gz"          MODEL_PATH "PaddleOCR/v2.3")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "e2e_server_pgnetA.tar.gz"              MODEL_PATH "PaddleOCR/v2.3")
+        # PaddleNLP
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ernie_tiny.tar.gz"           MODEL_PATH "PaddleNLP")
+        # PaddleGAN
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "esrgan_psnr_x4_div2k.tar.gz" MODEL_PATH "PaddleGAN")
+        # PaddleRec
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "deepfm.tar.gz"    MODEL_PATH "PaddleRec/v2.1.0")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "naml.tar.gz"      MODEL_PATH "PaddleRec/v2.1.0")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ncf.tar.gz"       MODEL_PATH "PaddleRec/v2.1.0")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "wide_deep.tar.gz" MODEL_PATH "PaddleRec/v2.1.0")
+        # PaddleVideo
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_NNADAPTER_UNITTESTS} "ppTSN.tar.gz"     MODEL_PATH "PaddleVideo/v2.2.0")
+    endif()
+    if(LITE_WITH_ARM)
 	    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL} "mobilenet_v1_int16.tar.gz")
         lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL} "resnet50.tar.gz")
         lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL} "MobileNetV1_quant.tar.gz")
@@ -111,13 +166,24 @@ if (WITH_TESTING)
     lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "lac_data_txt.tar.gz")
     lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "transformer_nlp2_data_txt.tar.gz")
     lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "roadsign_data_128.tar.gz")
-    lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "PASCALVOC2012_500.tar.gz")
+    if (LITE_WITH_NNADAPTER)
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "PASCALVOC2012_500.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "VOC2012_100.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "COCO2017_100.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ocr_db_data.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ocr_rec_data.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ocr_e2e_data.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "ernie_tiny_data.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "COCO2017_keypoints_100.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "GAN_set14.tar.gz")
+        lite_download_and_uncompress(${LITE_MODEL_DIR} ${LITE_URL_FOR_UNITTESTS} "specific_model_input_output.tar.gz")
+    endif()
 endif()
 
 # ----------------------------- PUBLISH -----------------------------
 # The final target for publish lite lib
 add_custom_target(publish_inference)
-if (LITE_WITH_LIGHT_WEIGHT_FRAMEWORK AND LITE_WITH_ARM)
+if (LITE_WITH_ARM)
     # for publish
     set(INFER_LITE_PUBLISH_ROOT "${CMAKE_BINARY_DIR}/inference_lite_lib.${ARM_TARGET_OS}.${ARM_TARGET_ARCH_ABI}")
     if (LITE_WITH_OPENCL)
@@ -132,18 +198,12 @@ if (LITE_WITH_LIGHT_WEIGHT_FRAMEWORK AND LITE_WITH_ARM)
     if (LITE_WITH_XPU)
         set(INFER_LITE_PUBLISH_ROOT "${INFER_LITE_PUBLISH_ROOT}.xpu")
     endif(LITE_WITH_XPU)
-    if (LITE_WITH_APU)
-        set(INFER_LITE_PUBLISH_ROOT "${INFER_LITE_PUBLISH_ROOT}.apu")
-    endif(LITE_WITH_APU)
     if (LITE_WITH_FPGA)
         set(INFER_LITE_PUBLISH_ROOT "${INFER_LITE_PUBLISH_ROOT}.fpga")
     endif(LITE_WITH_FPGA)
     if (LITE_WITH_BM)
         set(INFER_LITE_PUBLISH_ROOT "${INFER_LITE_PUBLISH_ROOT}.bm")
     endif(LITE_WITH_BM)
-    if (LITE_WITH_RKNPU)
-        set(INFER_LITE_PUBLISH_ROOT "${INFER_LITE_PUBLISH_ROOT}.rknpu")
-    endif(LITE_WITH_RKNPU)
     if (LITE_WITH_INTEL_FPGA)
         set(INFER_LITE_PUBLISH_ROOT "${INFER_LITE_PUBLISH_ROOT}.intel_fpga")
     endif(LITE_WITH_INTEL_FPGA)
@@ -157,14 +217,14 @@ message(STATUS "publish inference lib to ${INFER_LITE_PUBLISH_ROOT}")
 
 # add python lib
 if (LITE_WITH_PYTHON)
-    if(WIN32)   
+    if(WIN32)
         set(LITE_CORE "${CMAKE_BINARY_DIR}/lite/api/${CMAKE_BUILD_TYPE}/lite.pyd")
         set(LITE_CORE_DEPS ${LITE_CORE})
         add_custom_command(OUTPUT   ${LITE_CORE}
             COMMAND cmake -E copy $<TARGET_FILE:lite_pybind> ${LITE_CORE}
             DEPENDS lite_pybind)
         add_custom_target(copy_lite_pybind ALL DEPENDS ${LITE_CORE_DEPS})
-        
+
         add_custom_target(publish_inference_python_lib ${TARGET}
             COMMAND ${CMAKE_COMMAND} -E make_directory "${INFER_LITE_PUBLISH_ROOT}/python/lib"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${INFER_LITE_PUBLISH_ROOT}/python/install/libs"
@@ -175,7 +235,7 @@ if (LITE_WITH_PYTHON)
             COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/lite/api/${CMAKE_BUILD_TYPE}/lite.pyd" "${INFER_LITE_PUBLISH_ROOT}/python/lib/lite.pyd"
             DEPENDS copy_lite_pybind
             )
-            
+
         add_custom_target(publish_inference_python_installer ${TARGET}
             COMMAND ${PYTHON_EXECUTABLE} setup.py bdist_wheel
             WORKING_DIRECTORY ${INFER_LITE_PUBLISH_ROOT}/python/install/
@@ -344,7 +404,7 @@ if (LITE_WITH_X86)
     add_dependencies(publish_inference_x86_cxx_lib test_model_bin)
 
     configure_file(${CMAKE_SOURCE_DIR}/lite/demo/cxx/x86_mobilenetv1_light_demo/CMakeLists.txt.in ${CMAKE_SOURCE_DIR}/lite/demo/cxx/x86_mobilenetv1_light_demo/CMakeLists.txt @ONLY)
-    configure_file(${CMAKE_SOURCE_DIR}/lite/demo/cxx/x86_mobilenetv1_full_demo/CMakeLists.txt.in ${CMAKE_SOURCE_DIR}/lite/demo/cxx/x86_mobilenetv1_full_demo/CMakeLists.txt @ONLY)   
+    configure_file(${CMAKE_SOURCE_DIR}/lite/demo/cxx/x86_mobilenetv1_full_demo/CMakeLists.txt.in ${CMAKE_SOURCE_DIR}/lite/demo/cxx/x86_mobilenetv1_full_demo/CMakeLists.txt @ONLY)
     add_custom_target(publish_inference_x86_cxx_demos ${TARGET}
            COMMAND mkdir -p "${INFER_LITE_PUBLISH_ROOT}/demo/cxx"
            COMMAND cp -r "${CMAKE_SOURCE_DIR}/lite/demo/cxx/x86_mobilenetv1_light_demo" "${INFER_LITE_PUBLISH_ROOT}/demo/cxx/mobilenetv1_light"
@@ -375,7 +435,7 @@ if(LITE_WITH_CUDA)
     add_dependencies(publish_inference publish_inference_cuda_cxx_demos)
 endif(LITE_WITH_CUDA)
 
-if (LITE_WITH_LIGHT_WEIGHT_FRAMEWORK AND LITE_WITH_ARM)
+if (LITE_WITH_ARM)
     if (NOT LITE_ON_TINY_PUBLISH)
         # add cxx lib
         add_custom_target(publish_inference_cxx_lib ${TARGET}
@@ -395,27 +455,23 @@ if (LITE_WITH_LIGHT_WEIGHT_FRAMEWORK AND LITE_WITH_ARM)
                 add_dependencies(publish_inference_cxx_lib bundle_light_api)
                 add_dependencies(publish_inference_cxx_lib test_model_bin)
                 add_dependencies(publish_inference_cxx_lib benchmark_bin)
-                if (ARM_TARGET_OS STREQUAL "android" OR ARM_TARGET_OS STREQUAL "armlinux")
+                if (ARM_TARGET_OS STREQUAL "android" OR ARM_TARGET_OS STREQUAL "armlinux" OR ARM_TARGET_OS STREQUAL "armmacos")
                     add_dependencies(publish_inference_cxx_lib paddle_full_api_shared)
                     add_dependencies(publish_inference paddle_light_api_shared)
                     add_custom_command(TARGET publish_inference_cxx_lib
-                          COMMAND cp ${CMAKE_BINARY_DIR}/lite/api/*.so ${INFER_LITE_PUBLISH_ROOT}/cxx/lib
-                          COMMAND cp "${CMAKE_BINARY_DIR}/lite/api/benchmark_bin" "${INFER_LITE_PUBLISH_ROOT}/bin"
+                          COMMAND cp ${CMAKE_BINARY_DIR}/lite/api/libpaddle_light_api_shared* ${INFER_LITE_PUBLISH_ROOT}/cxx/lib
+                          COMMAND cp ${CMAKE_BINARY_DIR}/lite/api/libpaddle_full_api_shared* ${INFER_LITE_PUBLISH_ROOT}/cxx/lib
+                          COMMAND cp "${CMAKE_BINARY_DIR}/lite/api/tools/benchmark/benchmark_bin" "${INFER_LITE_PUBLISH_ROOT}/bin"
                           )
                 elseif(ARM_TARGET_OS STREQUAL "armmacos")
                     add_dependencies(publish_inference_cxx_lib paddle_full_api_shared)
                     add_dependencies(publish_inference paddle_light_api_shared)
                     add_custom_command(TARGET publish_inference_cxx_lib
                         COMMAND cp ${CMAKE_BINARY_DIR}/lite/api/*.dylib ${INFER_LITE_PUBLISH_ROOT}/cxx/lib
-                        COMMAND cp "${CMAKE_BINARY_DIR}/lite/api/benchmark_bin" "${INFER_LITE_PUBLISH_ROOT}/bin"
+                        COMMAND cp "${CMAKE_BINARY_DIR}/lite/api/tools/benchmark/benchmark_bin" "${INFER_LITE_PUBLISH_ROOT}/bin"
                         )
                 endif()
                 add_dependencies(publish_inference publish_inference_cxx_lib)
-                if(NOT "${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-                    add_custom_command(TARGET publish_inference_cxx_lib POST_BUILD
-                            COMMAND ${CMAKE_STRIP} "--strip-debug" ${INFER_LITE_PUBLISH_ROOT}/cxx/lib/*.a
-                            COMMAND ${CMAKE_STRIP} "--strip-debug" ${INFER_LITE_PUBLISH_ROOT}/cxx/lib/*.so)
-                endif()
             endif()
     else()
         if (IOS)
@@ -475,8 +531,8 @@ if (LITE_WITH_LIGHT_WEIGHT_FRAMEWORK AND LITE_WITH_ARM)
                     COMMAND cp "${CMAKE_BINARY_DIR}/lite/api/*.dylib" "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
                     COMMAND cp "${CMAKE_BINARY_DIR}/lite/api/libpaddle_api_light_bundled.a" "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
                     COMMAND cp "${CMAKE_SOURCE_DIR}/lite/utils/cv/paddle_*.h" "${INFER_LITE_PUBLISH_ROOT}/cxx/include"
-                    COMMAND cp -r "${CMAKE_SOURCE_DIR}/lite/demo/cxx/mobile_light" "${INFER_LITE_PUBLISH_ROOT}/demo/cxx"
-                    COMMAND cp -r "${CMAKE_SOURCE_DIR}/lite/demo/cxx/macos_m1_mobile_light_demo" "${INFER_LITE_PUBLISH_ROOT}/demo/cxx"
+                    COMMAND cp -r "${CMAKE_SOURCE_DIR}/lite/demo/cxx/armmacos_mobile_light_demo" "${INFER_LITE_PUBLISH_ROOT}/demo/cxx"
+                    COMMAND cp -r "${CMAKE_SOURCE_DIR}/lite/demo/cxx/mobile_light/*" "${INFER_LITE_PUBLISH_ROOT}/demo/cxx/armmacos_mobile_light_demo"
                 )
                 add_dependencies(tiny_publish_cxx_lib paddle_api_light_bundled)
                 add_dependencies(tiny_publish_cxx_lib paddle_light_api_shared)
@@ -683,18 +739,24 @@ if (LITE_WITH_MLU)
 endif()
 
 if(LITE_WITH_NNADAPTER)
-  # Build the NNAdapter runtime library and copy it to the publish directory
-  add_custom_target(publish_inference_nnadapter_runtime
-      COMMAND mkdir -p "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
-      COMMAND cp -r "${CMAKE_BINARY_DIR}/lite/backends/nnadapter/nnadapter/libnnadapter.so" "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
+  # Build the NNAdapter runtime library, copy the header files and library file to the publish directory
+  add_custom_target(publish_inference_nnadapter_runtime_header_files
+      COMMAND mkdir -p "${INFER_LITE_PUBLISH_ROOT}/cxx/include"
+      COMMAND cp -r "${CMAKE_SOURCE_DIR}/lite/backends/nnadapter/nnadapter/include/nnadapter" "${INFER_LITE_PUBLISH_ROOT}/cxx/include"
       DEPENDS nnadapter
       )
-  add_dependencies(publish_inference publish_inference_nnadapter_runtime)
+  add_dependencies(publish_inference publish_inference_nnadapter_runtime_header_files)
+  add_custom_target(publish_inference_nnadapter_runtime_library_file
+      COMMAND mkdir -p "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
+      COMMAND cp -r "${CMAKE_BINARY_DIR}/lite/backends/nnadapter/nnadapter/src/libnnadapter.so" "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
+      DEPENDS nnadapter
+      )
+  add_dependencies(publish_inference publish_inference_nnadapter_runtime_library_file)
   # Build the NNAdapter device HAL libraries for all of the specified devices and copy it to the publish directory
   foreach(device_name ${NNADAPTER_DEVICES})
     add_custom_target(publish_inference_nnadapter_${device_name}
       COMMAND mkdir -p "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
-      COMMAND cp -r "${CMAKE_BINARY_DIR}/lite/backends/nnadapter/nnadapter/driver/*/lib${device_name}.so" "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
+      COMMAND cp -r "${CMAKE_BINARY_DIR}/lite/backends/nnadapter/nnadapter/src/driver/${device_name}/*.so" "${INFER_LITE_PUBLISH_ROOT}/cxx/lib"
       DEPENDS ${device_name}
       )
     add_dependencies(publish_inference publish_inference_nnadapter_${device_name})

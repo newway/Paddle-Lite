@@ -140,6 +140,7 @@ const std::string& TargetRepr(TargetType target) {
                                               "kRKNPU",
                                               "kAPU",
                                               "kHuaweiAscendNPU",
+                                              "kImaginationNNA",
                                               "kIntelFPGA",
                                               "kMetal",
                                               "kNNAdapter"};
@@ -193,7 +194,8 @@ const std::string& CLPrecisionTypeToStr(CLPrecisionType type) {
 }
 
 std::set<TargetType> ExpandValidTargets(TargetType target) {
-  static const std::set<TargetType> valid_set({TARGET(kX86),
+  static const std::set<TargetType> valid_set({TARGET(kHost),
+                                               TARGET(kX86),
                                                TARGET(kCUDA),
                                                TARGET(kARM),
                                                TARGET(kOpenCL),
@@ -205,6 +207,7 @@ std::set<TargetType> ExpandValidTargets(TargetType target) {
                                                TARGET(kRKNPU),
                                                TARGET(kFPGA),
                                                TARGET(kHuaweiAscendNPU),
+                                               TARGET(kImaginationNNA),
                                                TARGET(kIntelFPGA),
                                                TARGET(kMetal),
                                                TARGET(kNNAdapter)});

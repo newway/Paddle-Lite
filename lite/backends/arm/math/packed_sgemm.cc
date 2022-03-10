@@ -272,20 +272,7 @@ void prepackA(TensorLite *tout,
               int group,
               bool is_trans,
               ARMContext *ctx) {
-  int hblock = 4;
-#ifdef __aarch64__
-  if (m <= 4) {
-    hblock = 4;
-  } else {
-    hblock = 8;
-  }
-#else
-  if (ctx->arch() == kA73 || ctx->arch() == kA35 || m <= 4) {
-    hblock = 4;
-  } else {
-    hblock = 6;
-  }
-#endif
+  int hblock = get_hblock(ctx, m);
   int m_roundup = hblock * ((m + hblock - 1) / hblock);
   int group_size_round_up = ((m_roundup * k + 15) / 16) * 16;
   if (tout->numel() < group_size_round_up * group) {
@@ -5057,7 +5044,7 @@ void sgemm_prepacked_8x12_a53(bool is_transB,
                 LEAKY1 LEAKY2
                 "b      20f                    \n" /* leakey relu end */
                 // hard swish
-                "14:                           \n"
+                "15:                           \n"
                 "ldr    q1,  [%[alpha], #0]    \n"
                 "ldr    q2,  [%[alpha], #16]   \n"
                 "movi   v0.4s,    #0           \n"

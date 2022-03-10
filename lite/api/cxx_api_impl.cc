@@ -46,9 +46,6 @@ void CxxPaddleApiImpl::Init(const lite_api::CxxConfig &config) {
   threads_ = config.threads();
 #ifdef LITE_USE_THREAD_POOL
   int thread_num = ThreadPool::Init(threads_);
-  if (thread_num > 1) {
-    ThreadPool::AcquireThreadPool();
-  }
 #endif
   if (!status_is_cloned_) {
     auto places = config.valid_places();
@@ -109,6 +106,8 @@ void CxxPaddleApiImpl::Init(const lite_api::CxxConfig &config) {
         SetNNAdapterMixedPrecisionQuantizationConfigBuffer(
             raw_predictor_->scope(),
             config.nnadapter_mixed_precision_quantization_config_buffer());
+    Context<TargetType::kNNAdapter>::SetNNAdapterDynamicShapeInfo(
+        raw_predictor_->scope(), config.nnadapter_dynamic_shape_info());
 #endif
 
     auto use_layout_preprocess_pass =
@@ -146,6 +145,10 @@ void CxxPaddleApiImpl::Init(const lite_api::CxxConfig &config) {
     CHECK(raw_predictor_) << "The Predictor can not be nullptr in Clone mode.";
   }
 
+#ifdef LITE_WITH_METAL
+  raw_predictor_->ConfigMetalContext(config);
+#endif
+
 #ifdef LITE_WITH_NPU
   // Store the model-level configuration into scope for kernels, and use
   // exe_scope to store the execution-level configuration
@@ -153,28 +156,6 @@ void CxxPaddleApiImpl::Init(const lite_api::CxxConfig &config) {
       raw_predictor_->scope(), config.subgraph_model_cache_dir());
 #endif
 
-#ifdef LITE_WITH_APU
-  // Store the model-level configuration into scope for kernels, and use
-  // exe_scope to store the execution-level configuration
-  Context<TargetType::kAPU>::SetSubgraphModelCacheDir(
-      raw_predictor_->scope(), config.subgraph_model_cache_dir());
-#endif
-
-#ifdef LITE_WITH_RKNPU
-  // Store the model-level configuration into scope for kernels, and use
-  // exe_scope to store the execution-level configuration
-  Context<TargetType::kRKNPU>::SetSubgraphModelCacheDir(
-      raw_predictor_->scope(), config.subgraph_model_cache_dir());
-  Context<TargetType::kRKNPU>::SetSubgraphModelCacheBuffers(
-      raw_predictor_->scope(), config.subgraph_model_cache_buffers());
-#endif
-
-#ifdef LITE_WITH_HUAWEI_ASCEND_NPU
-  Context<TargetType::kHuaweiAscendNPU>::SetHuaweiAscendDeviceID(
-      config.get_device_id());
-  Context<TargetType::kHuaweiAscendNPU>::SetSubgraphModelCacheDir(
-      config.subgraph_model_cache_dir());
-#endif
 #if (defined LITE_WITH_X86) && (defined PADDLE_WITH_MKLML) && \
     !(defined LITE_ON_MODEL_OPTIMIZE_TOOL)
   int num_threads = config.x86_math_num_threads();
@@ -242,7 +223,7 @@ void CxxPaddleApiImpl::Init(const lite_api::CxxConfig &config) {
 
 CxxPaddleApiImpl::~CxxPaddleApiImpl() {
 #ifdef LITE_USE_THREAD_POOL
-  ThreadPool::ReleaseThreadPool();
+  ThreadPool::Destroy();
 #endif
 }
 

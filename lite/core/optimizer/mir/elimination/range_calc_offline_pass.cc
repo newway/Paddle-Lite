@@ -42,7 +42,7 @@ void RangeCalcOfflinePass::Apply(const std::unique_ptr<SSAGraph>& graph) {
 void RangeCalcOfflinePass::RemoveRangePattern(
     const std::unique_ptr<SSAGraph>& graph) {
   for (auto& node : graph->StmtTopologicalOrder()) {
-    if (node->AsStmt().picked_kernel().op_type() != "range") continue;
+    if (node->AsStmt().op_type() != "range") continue;
 
     std::set<const Node*> nodes2rm_;
     auto& range_instruct = node->AsStmt();
@@ -59,8 +59,8 @@ void RangeCalcOfflinePass::RemoveRangePattern(
     if (!start_t->persistable() || !end_t->persistable() ||
         !step_t->persistable()) {
       LOG(WARNING) << "RangeCalcOfflinePass does not support input that is not "
-                      "persistent";
-      return;
+                      "persistable";
+      continue;
     }
     auto start = start_t->mutable_data<float>()[0];
     auto end = end_t->mutable_data<float>()[0];

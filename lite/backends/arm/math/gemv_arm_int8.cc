@@ -1618,10 +1618,10 @@ bool gemv_int8_trans_oth(const int8_t* A,
   const int8_t* weights_ptr = x;
   int out_cnt = M >> 4;
   int out_remain = M & 15;
-  int zero_ptr[M];  // NOLINT
-  memset(zero_ptr, 0, sizeof(int) * M);
-  float zerobuf[M];  // NOLINT
-  memset(zerobuf, 0, sizeof(float) * M);
+  int* zero_ptr = new int[M + 16];
+  float* zerobuf = new float[M + 16];
+  memset(zero_ptr, 0, sizeof(int) * (M + 16));
+  memset(zerobuf, 0, sizeof(float) * (M + 16));
   const float* bias_ptr = is_bias ? bias : zerobuf;
   float six = alpha;
 #ifdef __aarch64__
@@ -2146,6 +2146,8 @@ bool gemv_int8_trans_oth(const int8_t* A,
                  alpha,
                  offset,
                  threshold);
+  delete[] zero_ptr;
+  delete[] zerobuf;
   return true;
 }
 
@@ -2242,7 +2244,7 @@ bool gemv_int8_trans_oth(const int8_t* A,
     "beq    15f                   \n"                                     \
     "cmp    %w[relu],    #2       \n"                                     \
     "beq    13f                   \n"                                     \
-    "cmp    %w[relu],    #3       \n"                                     \
+    "cmp    %w[relu],    #4       \n"                                     \
     "beq    14f                   \n"                                     \
     "ldr    q2,    [%[alpha], #16]\n"                                     \
     "ldr    q1,    [%[alpha]]     \n"                                     \
@@ -2479,9 +2481,9 @@ inline void gemv_int8_dot_asm(GEMV_ASM_FUN_PARAMS(float)) {
   "cmp    %[relu],  #1            \n"   \
   "vmov.f32    q0,  #0.0          \n"   \
   "beq    15f                     \n"   \
-  "cmp    %[relu],   #1           \n"   \
-  "beq    13f                     \n"   \
   "cmp    %[relu],   #2           \n"   \
+  "beq    13f                     \n"   \
+  "cmp    %[relu],   #4           \n"   \
   "beq    14f                     \n"   \
   "vld1.32    {d2-d5}, [%[alpha]] \n"   \
   "vldr       d6,   [%[alpha], #32]\n"  \
@@ -2636,8 +2638,14 @@ void gemv_int8_oth(const int8_t* A,
     const int8_t* ptr_w5 = ptr_w4 + N;
     const int8_t* ptr_w6 = ptr_w5 + N;
     const int8_t* ptr_w7 = ptr_w6 + N;
-    auto bias_ptr = is_bias ? bias + out_idx : nullptr;
+    float scale_v[8] = {0.f};
+    float bias_v[8] = {0.f};
+    auto bias_ptr = is_bias ? bias + out_idx : bias_v;
     if (j == out_cnt - 1 && remain) {
+      for (int p = 0; p < remain; p++) {
+        scale_v[p] = scale_ptr[p];
+        bias_v[p] = bias_ptr[p];
+      }
       switch (8 - remain) {
         case 7:
           ptr_w1 = ptr_zero;
@@ -2683,6 +2691,11 @@ void gemv_int8_oth(const int8_t* A,
         default:
           break;
       }
+    } else {
+      for (int p = 0; p < 8; p++) {
+        scale_v[p] = scale_ptr[p];
+        bias_v[p] = bias_ptr[p];
+      }
     }
     gemv_int8_asm<dtype>(ptr_in,
                          ptr_w0,
@@ -2694,8 +2707,8 @@ void gemv_int8_oth(const int8_t* A,
                          ptr_w6,
                          ptr_w7,
                          cnt,
-                         scale_ptr,
-                         bias_ptr,
+                         scale_v,
+                         bias_v,
                          static_cast<int>(act),
                          alpha,
                          offset,
@@ -2724,7 +2737,14 @@ void gemv_int8_oth(const int8_t* A,
     const int8_t* ptr_w1 = ptr_w0 + N;
     const int8_t* ptr_w2 = ptr_w1 + N;
     const int8_t* ptr_w3 = ptr_w2 + N;
+    float scale_v[4] = {0.f};
+    float bias_v[4] = {0.f};
+    auto bias_ptr = is_bias ? bias + out_idx : bias_v;
     if (j == out_cnt - 1 && remain) {
+      for (int p = 0; p < remain; p++) {
+        scale_v[p] = scale_ptr[p];
+        bias_v[p] = bias_ptr[p];
+      }
       switch (4 - remain) {
         case 3:
           ptr_w1 = ptr_zero;
@@ -2750,16 +2770,20 @@ void gemv_int8_oth(const int8_t* A,
         default:
           break;
       }
+    } else {
+      for (int p = 0; p < 4; p++) {
+        scale_v[p] = scale_ptr[p];
+        bias_v[p] = bias_ptr[p];
+      }
     }
-    auto bias_ptr = is_bias ? bias + out_idx : nullptr;
     gemv_int8_asm<dtype>(ptr_in,
                          ptr_w0,
                          ptr_w1,
                          ptr_w2,
                          ptr_w3,
                          cnt,
-                         scale_ptr,
-                         bias_ptr,
+                         scale_v,
+                         bias_v,
                          static_cast<int>(act),
                          alpha,
                          offset,
@@ -2811,7 +2835,9 @@ void gemv_int8_sdot(const int8_t* A,
     dtype* out_p = out_ptr;
     const float* scale_ptr = scale + out_idx;
     dtype out_temp[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-    auto bias_ptr = is_bias ? bias + out_idx : nullptr;
+    float scale_v[8] = {0.f};
+    float bias_v[8] = {0.f};
+    auto bias_ptr = is_bias ? bias + out_idx : bias_v;
     const int8_t* ptr_in = data_in;
     const int8_t* ptr_w0 = A + (N * out_idx);
     const int8_t* ptr_w1 = ptr_w0 + N;
@@ -2822,6 +2848,10 @@ void gemv_int8_sdot(const int8_t* A,
     const int8_t* ptr_w6 = ptr_w5 + N;
     const int8_t* ptr_w7 = ptr_w6 + N;
     if (j == out_cnt - 1 && remain) {
+      for (int p = 0; p < remain; p++) {
+        scale_v[p] = scale_ptr[p];
+        bias_v[p] = bias_ptr[p];
+      }
       switch (8 - remain) {
         case 7:
           ptr_w1 = ptr_zero;
@@ -2867,6 +2897,11 @@ void gemv_int8_sdot(const int8_t* A,
         default:
           break;
       }
+    } else {
+      for (int p = 0; p < 8; p++) {
+        scale_v[p] = scale_ptr[p];
+        bias_v[p] = bias_ptr[p];
+      }
     }
 
     if (cnt > 0) {
@@ -2880,8 +2915,8 @@ void gemv_int8_sdot(const int8_t* A,
                                ptr_w6,
                                ptr_w7,
                                cnt,
-                               scale_ptr,
-                               bias_ptr,
+                               scale_v,
+                               bias_v,
                                static_cast<int>(act),
                                alpha,
                                offset,
@@ -2919,11 +2954,11 @@ void gemv_int8(const int8_t* A,
   float threshold = 6.f;
   if (act_param.has_active) {
     if (act_param.active_type == lite_api::ActivationType::kRelu6) {
-      alpha = act_param.threshold;
+      alpha = act_param.Relu_clipped_coef;
     } else if (act_param.active_type == lite_api::ActivationType::kLeakyRelu) {
       alpha = act_param.Leaky_relu_alpha;
     } else if (act_param.active_type == lite_api::ActivationType::kHardSwish) {
-      alpha = act_param.hard_swish_scale;
+      alpha = 1.0 / act_param.hard_swish_scale;
       offset = act_param.hard_swish_offset;
       threshold = act_param.hard_swish_threshold;
     }

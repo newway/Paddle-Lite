@@ -73,6 +73,15 @@ bool IsOpenCLBackendValid(bool check_fp16_valid) {
   return opencl_valid;
 }
 
+int GetOpenCLDeviceType() {
+#ifdef LITE_WITH_OPENCL
+  if (IsOpenCLBackendValid()) {
+    return paddle::lite::CLRuntime::Global()->GetGpuType();
+  }
+#endif
+  return -1;
+}
+
 Tensor::Tensor(void *raw) : raw_tensor_(raw) {}
 
 // TODO(Superjomn) refine this by using another `const void* const_raw`;
@@ -400,6 +409,11 @@ void ConfigBase::set_metal_use_memory_reuse(bool flag) {
 #ifdef LITE_WITH_METAL
   metal_use_memory_reuse_ = flag;
 #endif
+  return;
+}
+
+void ConfigBase::add_discarded_pass(const std::string pass) {
+  discarded_passes_.push_back(pass);
   return;
 }
 

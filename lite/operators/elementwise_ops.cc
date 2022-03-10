@@ -73,7 +73,7 @@ bool ElementwiseOp::InferShapeImpl() const {
     }
     for (size_t i = 0; i < max_dim; i++) {
       if (x_dims_array[i] == -1 || y_dims_array[i] == -1) {
-        out_dims_array[i] = -1;
+        out_dims_array[i] = 1;
       } else {
         out_dims_array[i] = (std::max)(x_dims_array[i], y_dims_array[i]);
       }
@@ -101,6 +101,9 @@ bool ElementwiseOp::AttachImpl(const cpp::OpDesc& opdesc, lite::Scope* scope) {
     param_.alpha = opdesc.GetAttr<float>("alpha");
     param_.bias = opdesc.GetAttr<float>("bias");
   }
+  input_tensor_ptrs_cache_.push_back(param_.X);
+  input_tensor_ptrs_cache_.push_back(param_.Y);
+  output_tensor_ptrs_cache_.push_back(param_.Out);
 
   return true;
 }

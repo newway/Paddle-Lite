@@ -23,14 +23,11 @@ namespace arena {
 
 std::shared_ptr<lite::OpLite> TestCase::CreateSubgraphOp() {
   static const std::set<TargetType> subgraph_op_supported_targets(
-      {TARGET(kNPU),
-       TARGET(kXPU),
-       TARGET(kHuaweiAscendNPU),
-       TARGET(kNNAdapter)});
+      {TARGET(kNPU), TARGET(kXPU), TARGET(kNNAdapter)});
   bool create_subgraph_op = subgraph_op_supported_targets.find(place_.target) !=
                             subgraph_op_supported_targets.end();
-#if defined(LITE_WITH_XPU) && !defined(LITE_WITH_XTCL)
-  create_subgraph_op = false;  // Use XPU kernel directly if XTCL is disabled.
+#if defined(LITE_WITH_XPU)
+  create_subgraph_op = false;  // Use XPU kernel directly
 #endif
   if (!create_subgraph_op) return nullptr;
   auto scope = inst_scope_.get();
@@ -49,6 +46,21 @@ std::shared_ptr<lite::OpLite> TestCase::CreateSubgraphOp() {
                                                        {"imagination_nna"});
 #elif defined(NNADAPTER_WITH_AMLOGIC_NPU)
   ctx_->As<NNAdapterContext>().SetNNAdapterDeviceNames(scope, {"amlogic_npu"});
+#elif defined(NNADAPTER_WITH_CAMBRICON_MLU)
+  ctx_->As<NNAdapterContext>().SetNNAdapterDeviceNames(scope,
+                                                       {"cambricon_mlu"});
+#elif defined(NNADAPTER_WITH_VERISILICON_TIMVX)
+  ctx_->As<NNAdapterContext>().SetNNAdapterDeviceNames(scope,
+                                                       {"verisilicon_timvx"});
+#elif defined(NNADAPTER_WITH_NVIDIA_TENSORRT)
+  ctx_->As<NNAdapterContext>().SetNNAdapterDeviceNames(scope,
+                                                       {"nvidia_tensorrt"});
+#elif defined(NNADAPTER_WITH_KUNLUNXIN_XTCL)
+  ctx_->As<NNAdapterContext>().SetNNAdapterDeviceNames(scope,
+                                                       {"kunlunxin_xtcl"});
+#elif defined(NNADAPTER_WITH_ANDROID_NNAPI)
+  ctx_->As<NNAdapterContext>().SetNNAdapterDeviceNames(scope,
+                                                       {"android_nnapi"});
 #endif
   // Create a new block desc to wrap the original op desc
   auto sub_program_desc = std::make_shared<cpp::ProgramDesc>();
