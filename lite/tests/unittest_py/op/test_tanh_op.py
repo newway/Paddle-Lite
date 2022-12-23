@@ -35,10 +35,16 @@ class TestTanhOp(AutoScanTest):
         ]
         self.enable_testing_on_place(places=x86_places)
 
-        arm_places = [
-            Place(TargetType.ARM, PrecisionType.FP32, DataLayoutType.NCHW)
-        ]
-        self.enable_testing_on_place(places=arm_places)
+        self.enable_testing_on_place(
+            TargetType.ARM,
+            PrecisionType.FP32,
+            DataLayoutType.NCHW,
+            thread=[1, 4])
+        self.enable_testing_on_place(
+            TargetType.ARM,
+            PrecisionType.FP16,
+            DataLayoutType.NCHW,
+            thread=[1, 4])
 
         # opencl demo
         opencl_places = [
@@ -84,10 +90,21 @@ class TestTanhOp(AutoScanTest):
         return program_config
 
     def sample_predictor_configs(self):
-        return self.get_predictor_configs(), [""], (1e-5, 1e-5)
+        atol, rtol = 1e-5, 1e-5
+        if self.get_nnadapter_device_name() == "kunlunxin_xtcl":
+            atol, rtol = 1e-4, 1e-4
+        return self.get_predictor_configs(), [""], (atol, rtol)
 
     def add_ignore_pass_case(self):
-        pass
+        def teller1(program_config, predictor_config):
+            if "nvidia_tensorrt" in self.get_nnadapter_device_name():
+                in_shape = program_config.inputs["input_data"].shape
+                if len(in_shape) == 1:
+                    return True
+
+        self.add_ignore_check_case(
+            teller1, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
+            "Lite does not support 'in_shape_size == 1' on nvidia_tensorrt.")
 
     def test(self, *args, **kwargs):
         self.run_and_statis(quant=False, max_examples=25)

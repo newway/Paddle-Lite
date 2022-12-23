@@ -154,6 +154,8 @@ void Conv2DTransposeCompute<PRECISION(kInt8),
   //! update hardswish parameter
   if (param.activation_param.active_type ==
       lite_api::ActivationType::kHardSwish) {
+    param.activation_param.hard_swish_scale =
+        param.activation_param.hard_swish_scale / param.output_scale;
     param.activation_param.hard_swish_offset =
         param.activation_param.hard_swish_offset / param.output_scale;
     param.activation_param.hard_swish_threshold =
@@ -165,8 +167,8 @@ PROFILE_INFO(kFloat, kFloat)
 template <>
 void Conv2DTransposeCompute<PRECISION(kFloat), PRECISION(kFloat)>::Run() {
   auto& ctx = this->ctx_->template As<ARMContext>();
-  ctx.ExtendWorkspace((workspace_size_ * sizeof(float)));
   INIT_PARAM
+  ctx.ExtendWorkspace((workspace_size_ * sizeof(float)));
   bool flag_bias = (param.bias != nullptr);
   auto paddings = *param.paddings;
   auto dilations = *param.dilations;
@@ -276,8 +278,9 @@ PROFILE_INFO(kInt8, kFloat)
 template <>
 void Conv2DTransposeCompute<PRECISION(kInt8), PRECISION(kFloat)>::Run() {
   auto& ctx = this->ctx_->template As<ARMContext>();
-  ctx.ExtendWorkspace((workspace_size_ * 4 * sizeof(int32_t)));
   INIT_PARAM
+  ctx.ExtendWorkspace(
+      ((group * chout * hout * wout + workspace_size_) * sizeof(int32_t)));
   bool flag_bias = (param.bias != nullptr);
   auto paddings = *param.paddings;
   auto dilations = *param.dilations;
@@ -374,8 +377,9 @@ PROFILE_INFO(kInt8, kInt8)
 template <>
 void Conv2DTransposeCompute<PRECISION(kInt8), PRECISION(kInt8)>::Run() {
   auto& ctx = this->ctx_->template As<ARMContext>();
-  ctx.ExtendWorkspace((workspace_size_ * 4 * sizeof(int32_t)));
   INIT_PARAM
+  ctx.ExtendWorkspace(
+      ((group * chout * hout * wout + workspace_size_) * sizeof(int32_t)));
   bool flag_bias = (param.bias != nullptr);
   auto paddings = *param.paddings;
   auto dilations = *param.dilations;
@@ -504,8 +508,8 @@ PROFILE_INFO(kFP16, kFP16)
 template <>
 void Conv2DTransposeCompute<PRECISION(kFP16), PRECISION(kFP16)>::Run() {
   auto& ctx = this->ctx_->template As<ARMContext>();
-  ctx.ExtendWorkspace((workspace_size_ * sizeof(float16_t)));
   INIT_PARAM
+  ctx.ExtendWorkspace((workspace_size_ * sizeof(float16_t)));
   bool flag_bias = (param.bias != nullptr);
   auto paddings = *param.paddings;
   auto dilations = *param.dilations;

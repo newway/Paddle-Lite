@@ -60,8 +60,8 @@ ops_lines = []
 
 # valid targets and valid_ops
 valid_targets = [
-    "kUnk", "kHost", "kX86", "kCUDA", "kARM", "kOpenCL", "kAny", "kFPGA",
-    "kNPU", "kXPU", "kBM", "kMLU", "kIntelFPGA", "kMetal", "kNNAdapter"
+    "kUnk", "kHost", "kX86", "kARM", "kOpenCL", "kAny", "kXPU", "kMetal",
+    "kNNAdapter"
 ]
 valid_ops = [[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [],
              [], [], []]
@@ -71,17 +71,10 @@ class TargetType:
     kUnk = 0
     kHost = 1
     kX86 = 2
-    kCUDA = 3
     kARM = 4
     kOpenCL = 5
     kAny = 6  # any target
-    kFPGA = 7
-    kNPU = 8
     kXPU = 9
-    kBM = 10
-    kMLU = 11
-    kRKNPU = 12
-    kIntelFPGA = 16
     kMetal = 17
     kNNAdapter = 18
 
@@ -102,14 +95,24 @@ with open(kernels_list_path) as f:
 with open(faked_kernels_list_path) as f:
     paths = set([path for path in f])
     for path in paths:
-        with open(path.strip()) as g:
-            c = g.read()
-            kernel_parser = RegisterLiteKernelParser(c)
-            kernel_parser.parse("ON", "ON")
-            for k in kernel_parser.kernels:
-                if hasattr(TargetType, k.target):
-                    index = getattr(TargetType, k.target)
-                    valid_ops[index].append(k.op_type)
+        if (sys.version[0] == '3'):
+            with open(path.strip(), encoding='utf-8') as g:
+                c = g.read()
+                kernel_parser = RegisterLiteKernelParser(c)
+                kernel_parser.parse("ON", "ON")
+                for k in kernel_parser.kernels:
+                    if hasattr(TargetType, k.target):
+                        index = getattr(TargetType, k.target)
+                        valid_ops[index].append(k.op_type)
+        else:
+            with open(path.strip()) as g:
+                c = g.read()
+                kernel_parser = RegisterLiteKernelParser(c)
+                kernel_parser.parse("ON", "ON")
+                for k in kernel_parser.kernels:
+                    if hasattr(TargetType, k.target):
+                        index = getattr(TargetType, k.target)
+                        valid_ops[index].append(k.op_type)
 
 # clear the repeated ops
 for target in valid_targets:

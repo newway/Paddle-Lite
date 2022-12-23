@@ -13,6 +13,9 @@
 // limitations under the License.
 
 #include "driver/huawei_ascend_npu/utility.h"
+#if defined(LITE_WITH_PYTHON)
+#include <pybind11/pybind11.h>
+#endif
 #include <map>
 #include <mutex>  // NOLINT
 #include <utility>
@@ -237,6 +240,9 @@ bool BuildOMModelToBuffer(
     const std::string& optional_shape_str,
     const DynamicShapeMode dynamic_shape_mode,
     AscendConfigParams* config_params) {
+#if defined(LITE_WITH_PYTHON)
+  pybind11::gil_scoped_release no_gil;
+#endif
   // Should initialize the GE graph builder before model building
   InitializeGraphBuilder(config_params);
   // Convert the CANN IR graph to the CANN om model
@@ -655,9 +661,10 @@ bool GetAscendCANNVersion(int* major, int* minor, int* patch) {
         return true;
       }
     }
-    NNADAPTER_LOG(FATAL) << "Unable to find the Ascend CANN installation path! "
-                            "Please install the Ascend CANN and add the root "
-                            "directory into LD_LIBRARY_PATH.";
+    NNADAPTER_LOG(WARNING)
+        << "Unable to find the Ascend CANN installation path! "
+           "Please install the Ascend CANN and add the root "
+           "directory into LD_LIBRARY_PATH.";
     return false;
   }
   *major = major_version;

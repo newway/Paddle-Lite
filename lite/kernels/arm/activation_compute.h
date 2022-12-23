@@ -60,7 +60,8 @@ class SigmoidCompute : public KernelLite<TARGET(kARM), PRECISION(kFloat)> {
   virtual ~SigmoidCompute() = default;
 };
 
-class TanhCompute : public KernelLite<TARGET(kARM), PRECISION(kFloat)> {
+template <PrecisionType ptype>
+class TanhCompute : public KernelLite<TARGET(kARM), ptype> {
  public:
   using param_t = operators::ActivationParam;
 
@@ -95,6 +96,15 @@ class EluCompute : public KernelLite<TARGET(kARM), PRECISION(kFloat)> {
   void Run() override;
 
   virtual ~EluCompute() = default;
+};
+
+class SiluCompute : public KernelLite<TARGET(kARM), PRECISION(kFloat)> {
+ public:
+  using param_t = operators::ActivationParam;
+
+  void Run() override;
+
+  virtual ~SiluCompute() = default;
 };
 
 }  // namespace arm

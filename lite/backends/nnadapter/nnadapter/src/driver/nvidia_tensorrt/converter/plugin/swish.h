@@ -18,43 +18,51 @@
 namespace nnadapter {
 namespace nvidia_tensorrt {
 
-class SwishPluginDynamic : public PluginDynamic {
+class SwishPlugin : public Plugin {
  public:
-  SwishPluginDynamic() = default;
+  SwishPlugin() = default;
 
-  explicit SwishPluginDynamic(const float beta) : beta_(beta) {}
+  explicit SwishPlugin(const float beta) : beta_(beta) {}
 
-  SwishPluginDynamic(const void* serial_data, size_t serial_length) {
+  SwishPlugin(const void* serial_data, size_t serial_length) {
     Deserialize(&serial_data, &serial_length, &beta_);
   }
 
-  nvinfer1::IPluginV2DynamicExt* clone() const noexcept {
-    return new SwishPluginDynamic(beta_);
+  nvinfer1::IPluginV2* clone() const TRT_NOEXCEPT {
+    return new SwishPlugin(beta_);
   }
 
-  int32_t enqueue(const nvinfer1::PluginTensorDesc* input_desc,
-                  const nvinfer1::PluginTensorDesc* output_desc,
-                  const void* const* inputs,
-                  void* const* outputs,
-                  void* workspace,
-                  cudaStream_t stream) noexcept;
+  int enqueue(int batch_size,
+#if TENSORRT_VERSION_GE(8, 0, 0, 0)
+              void const* const* inputs,
+              void* const* outputs,
+#else
+              const void* const* inputs,
+              void** outputs,
+#endif
+              void* workspace,
+              cudaStream_t stream) TRT_NOEXCEPT;
 
-  const char* getPluginType() const noexcept;
+  const char* getPluginType() const TRT_NOEXCEPT;
 
-  size_t getSerializationSize() const noexcept { return SerializedSize(beta_); }
+  size_t getSerializationSize() const TRT_NOEXCEPT {
+    return SerializedSize(beta_);
+  }
 
-  void serialize(void* buffer) const noexcept { Serialize(&buffer, beta_); };
+  void serialize(void* buffer) const TRT_NOEXCEPT {
+    Serialize(&buffer, beta_);
+  };
 
  private:
   float beta_{1.0f};
 };
 
-class SwishPluginDynamicCreator : public PluginCreator {
+class SwishPluginCreator : public PluginCreator {
  public:
-  const char* getPluginName() const noexcept;
+  const char* getPluginName() const TRT_NOEXCEPT;
   nvinfer1::IPluginV2* deserializePlugin(const char* name,
                                          void const* serial_data,
-                                         size_t serial_length) noexcept;
+                                         size_t serial_length) TRT_NOEXCEPT;
 };
 
 }  // namespace nvidia_tensorrt

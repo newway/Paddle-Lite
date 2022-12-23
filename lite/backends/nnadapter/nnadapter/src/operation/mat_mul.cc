@@ -17,13 +17,18 @@
 #include "core/types.h"
 #include "utility/debug.h"
 #include "utility/logging.h"
+#include "utility/micros.h"
 #include "utility/modeling.h"
 #include "utility/utility.h"
 
 namespace nnadapter {
 namespace operation {
 
-int PrepareMatMul(core::Operation* operation) {
+NNADAPTER_EXPORT bool ValidateMatMul(const core::Operation* operation) {
+  return true;
+}
+
+NNADAPTER_EXPORT int PrepareMatMul(core::Operation* operation) {
   MAT_MUL_OPERATION_EXTRACT_INPUTS_OUTPUTS
 
   // Infer the shape and type of output operands
@@ -52,10 +57,10 @@ int PrepareMatMul(core::Operation* operation) {
       y_shape.push_back(1);
       squeeze_last = true;
     }
-    if (x_size < y_size) {
-      x_shape.insert(x_shape.begin(), y_size - x_size, 1);
-    } else if (y_size < x_size) {
-      y_shape.insert(y_shape.begin(), x_size - y_size, 1);
+    if (x_shape.size() < y_shape.size()) {
+      x_shape.insert(x_shape.begin(), y_shape.size() - x_shape.size(), 1);
+    } else if (y_shape.size() < x_shape.size()) {
+      y_shape.insert(y_shape.begin(), x_shape.size() - y_shape.size(), 1);
     }
     NNADAPTER_CHECK_EQ(x_shape.size(), y_shape.size());
     NNADAPTER_CHECK_GE(x_shape.size(), 2UL);
@@ -73,12 +78,12 @@ int PrepareMatMul(core::Operation* operation) {
                              << " and y_shape[i] = " << y_shape[i];
       }
     }
-    if (transpose_x) {
+    if (transpose_x && x_size != 1) {
       out_shape.push_back(x_shape.back());
     } else {
       out_shape.push_back(x_shape[x_shape.size() - 2]);
     }
-    if (transpose_y) {
+    if (transpose_y && y_size != 1) {
       out_shape.push_back(y_shape[y_shape.size() - 2]);
     } else {
       out_shape.push_back(y_shape.back());
@@ -88,8 +93,8 @@ int PrepareMatMul(core::Operation* operation) {
       out_shape.erase(out_shape.begin());
     }
     if (squeeze_last) {
-      NNADAPTER_CHECK_EQ(*out_shape.end(), 1);
-      out_shape.erase(out_shape.end());
+      NNADAPTER_CHECK_EQ(*(out_shape.end() - 1), 1);
+      out_shape.erase(out_shape.end() - 1);
     }
     if (out_shape.empty()) {
       out_shape.push_back(1);
@@ -120,6 +125,12 @@ int PrepareMatMul(core::Operation* operation) {
   out_type.precision = x_type.precision;
   NNADAPTER_VLOG(5) << "output: " << OperandToString(output_operand);
   return NNADAPTER_NO_ERROR;
+}
+
+NNADAPTER_EXPORT int ExecuteMatMul(core::Operation* operation) {
+  NNADAPTER_LOG(FATAL) << OperationTypeToString(operation->type)
+                       << " is not implemented!";
+  return NNADAPTER_FEATURE_NOT_SUPPORTED;
 }
 
 }  // namespace operation

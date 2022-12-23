@@ -14,6 +14,7 @@
 
 #include "lite/kernels/xpu/sequence_pool_compute.h"
 #include <string>
+#include <vector>
 #include "lite/backends/xpu/xpu_header_sitter.h"
 #include "lite/core/op_registry.h"
 
@@ -23,8 +24,6 @@ namespace kernels {
 namespace xpu {
 
 void XPUSequencePoolCompute::PrepareForRun() {
-  lod_xpu_guard_ =
-      TargetWrapperXPU::MallocScratchPad(XPU_MAX_LOD_SIZE * sizeof(int));
   lod_cpu.reset(new int[XPU_MAX_LOD_SIZE]);
 }
 
@@ -44,18 +43,29 @@ void XPUSequencePoolCompute::Run() {
   for (size_t i = 0; i < in_lod.size(); ++i) {
     lod_cpu[i] = in_lod[i];
   }
-  int* lod_xpu = reinterpret_cast<int*>(lod_xpu_guard_->addr_);
-  XPU_CALL(xpu_memcpy(lod_xpu,
-                      lod_cpu.get(),
-                      in_lod.size() * sizeof(int),
-                      XPUMemcpyKind::XPU_HOST_TO_DEVICE));
+
+  int batch_size = in_lod.size() - 1;
+  std::vector<uint64_t> offset_new;
+  if (in->lod().size() == 2) {
+    offset_new.resize(in->lod()[0].size());
+    offset_new = in->lod()[0];
+  } else {
+    offset_new.resize(batch_size + 1);
+    for (int i = 0; i <= batch_size; i++) {
+      offset_new[i] = i;
+    }
+  }
+  out->mutable_lod()->clear();
+  out->mutable_lod()->push_back(offset_new);
+
+  int lod_len = in_lod.size();
   int r = 0;
   if (pool_type_str == "MAX") {
     r = xdnn::sequence_max_pool<float, int>(
         ctx.GetRawContext(),
         in->data<float>(),
-        lod_xpu,
         out->mutable_data<float>(TARGET(kXPU)),
+        {lod_cpu.get(), lod_len, nullptr},
         num_seq,
         dim,
         pad_value,
@@ -64,8 +74,8 @@ void XPUSequencePoolCompute::Run() {
     r = xdnn::sequence_sum_pool<float, int>(
         ctx.GetRawContext(),
         in->data<float>(),
-        lod_xpu,
         out->mutable_data<float>(TARGET(kXPU)),
+        {lod_cpu.get(), lod_len, nullptr},
         num_seq,
         dim,
         pad_value);
@@ -73,8 +83,8 @@ void XPUSequencePoolCompute::Run() {
     r = xdnn::sequence_last_pool<float, int>(
         ctx.GetRawContext(),
         in->data<float>(),
-        lod_xpu,
         out->mutable_data<float>(TARGET(kXPU)),
+        {lod_cpu.get(), lod_len, nullptr},
         num_seq,
         dim,
         pad_value);
@@ -82,8 +92,8 @@ void XPUSequencePoolCompute::Run() {
     r = xdnn::sequence_first_pool<float, int>(
         ctx.GetRawContext(),
         in->data<float>(),
-        lod_xpu,
         out->mutable_data<float>(TARGET(kXPU)),
+        {lod_cpu.get(), lod_len, nullptr},
         num_seq,
         dim,
         pad_value);

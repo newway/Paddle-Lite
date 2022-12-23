@@ -26,19 +26,21 @@ namespace operation {
   NNADAPTER_CHECK_EQ(output_count, 1);                                      \
   /* Input */                                                               \
   auto input_operand = input_operands[0];                                   \
+  auto input_dimension_count = input_operand->type.dimensions.count;        \
   NNADAPTER_VLOG(5) << "input_operand: " << OperandToString(input_operand); \
   /* Axes */                                                                \
   auto axes_operand = input_operands[1];                                    \
   int axes_size = axes_operand->length / sizeof(int32_t);                   \
   auto axes_data = reinterpret_cast<int32_t*>(axes_operand->buffer);        \
   for (int i = 0; i < axes_size; i++) {                                     \
+    axes_data[i] = axes_data[i] < 0 ? axes_data[i] + input_dimension_count  \
+                                    : axes_data[i];                         \
     NNADAPTER_VLOG(5) << "axes[" << i << "]: " << axes_data[i];             \
   }                                                                         \
   /* Keep_dim */                                                            \
   auto keep_dim_operand = input_operands[2];                                \
-  auto keep_dims = *reinterpret_cast<int8_t*>(keep_dim_operand->buffer);    \
-  NNADAPTER_VLOG(5) << "keep_dims: " << keep_dims;                          \
-  bool keep_dim = keep_dims ? true : false;                                 \
+  auto keep_dim = *reinterpret_cast<bool*>(keep_dim_operand->buffer);       \
+  NNADAPTER_VLOG(5) << "keep_dim: " << keep_dim;                            \
   /* Output */                                                              \
   auto output_operand = output_operands[0];                                 \
   NNADAPTER_VLOG(5) << "output_operand: " << OperandToString(output_operand);

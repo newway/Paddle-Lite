@@ -24,12 +24,16 @@
 #include "utility/logging.h"
 #include "utility/micros.h"
 
-#define REGISTER_OPERATION(__op_type__, __func_name__, ...) \
-  extern int __func_name__(nnadapter::core::Operation* operation);
+#define REGISTER_OPERATION(__op_type__,            \
+                           __validate_func_name__, \
+                           __prepare_func_name__,  \
+                           __execute_func_name__,  \
+                           ...)                    \
+  extern int __prepare_func_name__(nnadapter::core::Operation* operation);
 namespace nnadapter {
 namespace operation {
 #include "operation/all.h"  // NOLINT
-#undef __NNADAPTER_CORE_OPERATION_ALL_H__
+#undef __NNADAPTER_OPERATION_ALL_H__
 }  // namespace operation
 }  // namespace nnadapter
 #undef REGISTER_OPERATION
@@ -126,6 +130,8 @@ NNADAPTER_EXPORT int NNAdapterDevice_getVersion(const NNAdapterDevice* device,
 NNADAPTER_EXPORT int NNAdapterContext_create(NNAdapterDevice** devices,
                                              uint32_t num_devices,
                                              const char* properties,
+                                             int (*callback)(int event_id,
+                                                             void* user_data),
                                              NNAdapterContext** context) {
   if (!devices || !num_devices || !context) {
     return NNADAPTER_INVALID_PARAMETER;
@@ -134,7 +140,8 @@ NNADAPTER_EXPORT int NNAdapterContext_create(NNAdapterDevice** devices,
   for (uint32_t i = 0; i < num_devices; i++) {
     ds.push_back(reinterpret_cast<nnadapter::runtime::Device*>(devices[i]));
   }
-  auto x = new nnadapter::runtime::Context(ds, std::string(properties));
+  auto x =
+      new nnadapter::runtime::Context(ds, std::string(properties), callback);
   if (x == nullptr) {
     *context = nullptr;
     return NNADAPTER_OUT_OF_MEMORY;
@@ -252,12 +259,16 @@ NNADAPTER_EXPORT int NNAdapterModel_addOperation(
         reinterpret_cast<nnadapter::core::Operand*>(output_operands[i]);
   }
   switch (type) {
-#define REGISTER_OPERATION(__op_type__, __func_name__) \
-  case NNADAPTER_##__op_type__:                        \
-    nnadapter::operation::__func_name__(o);            \
+#define REGISTER_OPERATION(__op_type__,             \
+                           __validate_func_name__,  \
+                           __prepare_func_name__,   \
+                           __execute_func_name__,   \
+                           ...)                     \
+  case NNADAPTER_##__op_type__:                     \
+    nnadapter::operation::__prepare_func_name__(o); \
     break;
 #include "operation/all.h"  // NOLINT
-#undef __NNADAPTER_CORE_OPERATION_ALL_H__
+#undef __NNADAPTER_OPERATION_ALL_H__
 #undef REGISTER_OPERATION
     default:
       NNADAPTER_LOG(WARNING) << "Unsupported operation("
@@ -377,7 +388,9 @@ NNADAPTER_EXPORT int NNAdapterExecution_setInput(
     NNAdapterExecution* execution,
     int32_t index,
     void* memory,
-    void* (*access)(void* memory, NNAdapterOperandType* type)) {
+    void* (*access)(void* memory,
+                    NNAdapterOperandType* type,
+                    void* device_buffer)) {
   if (!execution) {
     return NNADAPTER_INVALID_PARAMETER;
   }
@@ -389,7 +402,9 @@ NNADAPTER_EXPORT int NNAdapterExecution_setOutput(
     NNAdapterExecution* execution,
     int32_t index,
     void* memory,
-    void* (*access)(void* memory, NNAdapterOperandType* type)) {
+    void* (*access)(void* memory,
+                    NNAdapterOperandType* type,
+                    void* device_buffer)) {
   if (!execution) {
     return NNADAPTER_INVALID_PARAMETER;
   }

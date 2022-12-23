@@ -16,6 +16,7 @@
 #include <map>
 #include <set>
 #include <vector>
+#include "driver/nvidia_tensorrt/operation/type.h"
 #include "utility/logging.h"
 #include "utility/micros.h"
 #include "utility/modeling.h"
@@ -197,6 +198,7 @@ NNADAPTER_EXPORT std::string Visualize(core::Model* model) {
       case NNADAPTER_MUL:
       case NNADAPTER_POW:
       case NNADAPTER_SUB:
+      case NNADAPTER_FLOOR_DIV:
         input_args = {"input0", "input1", "fuse_code"};
         output_args = {"output"};
         break;
@@ -302,6 +304,8 @@ NNADAPTER_EXPORT std::string Visualize(core::Model* model) {
       case NNADAPTER_SQUARE:
       case NNADAPTER_SWISH:
       case NNADAPTER_TANH:
+      case NNADAPTER_SIN:
+      case NNADAPTER_COS:
         input_args = {"input"};
         output_args = {"output"};
         break;
@@ -323,7 +327,7 @@ NNADAPTER_EXPORT std::string Visualize(core::Model* model) {
         output_args = {"output"};
         break;
       case NNADAPTER_SLICE:
-        input_args = {"input", "axes", "start", "ends"};
+        input_args = {"input", "axes", "start", "ends", "steps"};
         output_args = {"output"};
         break;
       case NNADAPTER_CLIP:
@@ -331,6 +335,7 @@ NNADAPTER_EXPORT std::string Visualize(core::Model* model) {
         output_args = {"output"};
         break;
       case NNADAPTER_REDUCE_MEAN:
+      case NNADAPTER_REDUCE_MAX:
       case NNADAPTER_REDUCE_SUM:
         input_args = {"input", "axes", "keep_dim"};
         output_args = {"output"};
@@ -353,6 +358,7 @@ NNADAPTER_EXPORT std::string Visualize(core::Model* model) {
         output_args = {"output"};
         break;
       case NNADAPTER_SOFTMAX:
+      case NNADAPTER_LOG_SOFTMAX:
         input_args = {"input", "axis"};
         output_args = {"output"};
         break;
@@ -384,6 +390,13 @@ NNADAPTER_EXPORT std::string Visualize(core::Model* model) {
         break;
       case NNADAPTER_SPLIT:
         input_args = {"input", "axis", "split"};
+        output_args.resize(output_count);
+        for (size_t i = 0; i < output_count; i++) {
+          output_args[i] = string_format("output%d", i);
+        }
+        break;
+      case NNADAPTER_UNSTACK:
+        input_args = {"input", "axis", "num"};
         output_args.resize(output_count);
         for (size_t i = 0; i < output_count; i++) {
           output_args[i] = string_format("output%d", i);
@@ -508,9 +521,63 @@ NNADAPTER_EXPORT std::string Visualize(core::Model* model) {
         input_args = {"condition", "input0", "input1"};
         output_args = {"output"};
         break;
+      case NNADAPTER_YOLO_BOX:
+        input_args = {
+            "input",
+            "imgsize",
+            "anchors",
+            "class_num",
+            "conf_thresh",
+            "downsample_ratio",
+            "clip_bbox",
+            "scale_x_y",
+            "iou_aware",
+            "iou_aware_factor",
+        };
+        output_args = {"boxes", "scores"};
+        break;
+      case NNADAPTER_PRIOR_BOX:
+        input_args = {"Input",
+                      "Image",
+                      "min_sizes",
+                      "max_sizes",
+                      "aspect_ratios",
+                      "variances",
+                      "flip",
+                      "clip",
+                      "step_w",
+                      "step_h",
+                      "offset",
+                      "min_max_aspect_ratios_order"};
+        output_args = {"Boxes", "Variances"};
+        break;
+      case NNADAPTER_NON_MAX_SUPPRESSION:
+        input_args = {"BBoxes",
+                      "Scores",
+                      "background_label",
+                      "keep_top_k",
+                      "nms_eta",
+                      "nms_threshold",
+                      "nms_top_k",
+                      "normalized",
+                      "score_threshold"};
+        output_args = {"Out", "NmsRoisNum", "Index"};
+        break;
       default:
-        NNADAPTER_LOG(FATAL) << "unsupported op: "
-                             << static_cast<int>(operation->type);
+        if (operation->type < 0) {
+          input_args.resize(input_count);
+          for (int i = 0; i < input_count; i++) {
+            input_args[i] = string_format("input%d", i);
+          }
+          output_args.resize(output_count);
+          for (int i = 0; i < output_count; i++) {
+            output_args[i] = string_format("output%d", i);
+          }
+        } else {
+          NNADAPTER_LOG(FATAL) << "unsupported op: "
+                               << static_cast<int>(operation->type);
+        }
+        break;
     }
     for (size_t i = 0; i < input_count; i++) {
       auto* operand = input_operands[i];
@@ -586,6 +653,8 @@ NNADAPTER_EXPORT std::string OperandLayoutCodeToString(
   switch (type) {
     NNADAPTER_TYPE_TO_STRING(NCHW);
     NNADAPTER_TYPE_TO_STRING(NHWC);
+    NNADAPTER_TYPE_TO_STRING(HWCN);
+    NNADAPTER_TYPE_TO_STRING(HWNC);
     default:
       name = "UNKNOWN";
       break;
@@ -630,6 +699,7 @@ NNADAPTER_EXPORT std::string OperationTypeToString(
     NNADAPTER_TYPE_TO_STRING(CONCAT);
     NNADAPTER_TYPE_TO_STRING(CONV_2D);
     NNADAPTER_TYPE_TO_STRING(CONV_2D_TRANSPOSE);
+    NNADAPTER_TYPE_TO_STRING(COS);
     NNADAPTER_TYPE_TO_STRING(CUM_SUM);
     NNADAPTER_TYPE_TO_STRING(DEFORMABLE_CONV_2D);
     NNADAPTER_TYPE_TO_STRING(DEQUANTIZE);
@@ -641,6 +711,7 @@ NNADAPTER_EXPORT std::string OperationTypeToString(
     NNADAPTER_TYPE_TO_STRING(FILL_LIKE);
     NNADAPTER_TYPE_TO_STRING(FLATTEN);
     NNADAPTER_TYPE_TO_STRING(FLOOR);
+    NNADAPTER_TYPE_TO_STRING(FLOOR_DIV);
     NNADAPTER_TYPE_TO_STRING(FULLY_CONNECTED);
     NNADAPTER_TYPE_TO_STRING(GATHER);
     NNADAPTER_TYPE_TO_STRING(GELU);
@@ -656,6 +727,7 @@ NNADAPTER_EXPORT std::string OperationTypeToString(
     NNADAPTER_TYPE_TO_STRING(LESS);
     NNADAPTER_TYPE_TO_STRING(LESS_EQUAL);
     NNADAPTER_TYPE_TO_STRING(LOG);
+    NNADAPTER_TYPE_TO_STRING(LOG_SOFTMAX);
     NNADAPTER_TYPE_TO_STRING(LP_NORMALIZATION);
     NNADAPTER_TYPE_TO_STRING(MAT_MUL);
     NNADAPTER_TYPE_TO_STRING(MAX);
@@ -663,15 +735,18 @@ NNADAPTER_EXPORT std::string OperationTypeToString(
     NNADAPTER_TYPE_TO_STRING(MESHGRID);
     NNADAPTER_TYPE_TO_STRING(MIN);
     NNADAPTER_TYPE_TO_STRING(MUL);
+    NNADAPTER_TYPE_TO_STRING(NON_MAX_SUPPRESSION);
     NNADAPTER_TYPE_TO_STRING(NOT);
     NNADAPTER_TYPE_TO_STRING(NOT_EQUAL);
     NNADAPTER_TYPE_TO_STRING(PAD);
+    NNADAPTER_TYPE_TO_STRING(PRIOR_BOX);
     NNADAPTER_TYPE_TO_STRING(POW);
     NNADAPTER_TYPE_TO_STRING(PRELU);
     NNADAPTER_TYPE_TO_STRING(QUANTIZE);
     NNADAPTER_TYPE_TO_STRING(RELU);
     NNADAPTER_TYPE_TO_STRING(RELU6);
     NNADAPTER_TYPE_TO_STRING(RANGE);
+    NNADAPTER_TYPE_TO_STRING(REDUCE_MAX);
     NNADAPTER_TYPE_TO_STRING(REDUCE_MEAN);
     NNADAPTER_TYPE_TO_STRING(REDUCE_SUM);
     NNADAPTER_TYPE_TO_STRING(RESHAPE);
@@ -680,6 +755,7 @@ NNADAPTER_EXPORT std::string OperationTypeToString(
     NNADAPTER_TYPE_TO_STRING(ROI_ALIGN);
     NNADAPTER_TYPE_TO_STRING(SHAPE);
     NNADAPTER_TYPE_TO_STRING(SIGMOID);
+    NNADAPTER_TYPE_TO_STRING(SIN);
     NNADAPTER_TYPE_TO_STRING(SLICE);
     NNADAPTER_TYPE_TO_STRING(STACK);
     NNADAPTER_TYPE_TO_STRING(SOFTMAX);
@@ -694,10 +770,12 @@ NNADAPTER_EXPORT std::string OperationTypeToString(
     NNADAPTER_TYPE_TO_STRING(TILE);
     NNADAPTER_TYPE_TO_STRING(TOP_K);
     NNADAPTER_TYPE_TO_STRING(TRANSPOSE);
+    NNADAPTER_TYPE_TO_STRING(YOLO_BOX);
     NNADAPTER_TYPE_TO_STRING(UNSQUEEZE);
+    NNADAPTER_TYPE_TO_STRING(UNSTACK);
     NNADAPTER_TYPE_TO_STRING(WHERE);
     default:
-      name = "UNKNOWN";
+      name = type < 0 ? string_format("CUSTOM(type=%d)", type) : "UNKNOWN";
       break;
   }
   return name;
@@ -903,7 +981,6 @@ NNADAPTER_EXPORT std::string OperandValueToString(core::Operand* operand) {
 }
 
 NNADAPTER_EXPORT std::string OperandTypeToString(NNAdapterOperandType* type) {
-  const uint32_t max_scale_display_size = 20;
   std::ostringstream os;
   os << " precision: " << OperandPrecisionCodeToString(type->precision)
      << std::endl;
@@ -925,13 +1002,8 @@ NNADAPTER_EXPORT std::string OperandTypeToString(NNAdapterOperandType* type) {
     case NNADAPTER_QUANT_INT16_SYMM_PER_CHANNEL:
     case NNADAPTER_QUANT_INT32_SYMM_PER_CHANNEL: {
       os << " scales: [";
-      for (uint32_t i = 0; i < max_scale_display_size &&
-                           i < type->symm_per_channel_params.scale_count;
-           i++) {
+      for (uint32_t i = 0; i < type->symm_per_channel_params.scale_count; i++) {
         os << type->symm_per_channel_params.scales[i] << ",";
-      }
-      if (type->symm_per_channel_params.scale_count > max_scale_display_size) {
-        os << "...";
       }
       os << "]";
       os << " channel_dim: " << type->symm_per_channel_params.channel_dim;

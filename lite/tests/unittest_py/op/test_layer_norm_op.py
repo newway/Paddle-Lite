@@ -54,6 +54,8 @@ class TestLayerNormOp(AutoScanTest):
             Place(TargetType.Host, PrecisionType.FP32)
         ]
         self.enable_testing_on_place(places=opencl_places)
+        self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
+        self.enable_devices_on_nnadapter(device_names=["intel_openvino"])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -64,16 +66,17 @@ class TestLayerNormOp(AutoScanTest):
         in_shape = draw(
             st.lists(
                 st.integers(
-                    min_value=1, max_value=64), min_size=3, max_size=3))
-        in_shape.insert(0, draw(st.integers(min_value=1, max_value=16)))
+                    min_value=1, max_value=64), min_size=2, max_size=3))
+        in_shape.insert(0, draw(st.integers(min_value=1, max_value=64)))
         epsilon = draw(st.floats(min_value=0.0001, max_value=0.0005))
-        begin_norm_axis = draw(st.sampled_from([1, 2]))
+        begin_norm_axis = draw(st.sampled_from([1, 2, 3]))
+        assume(begin_norm_axis < len(in_shape))
 
         def generate_input(*args, **kwargs):
             return np.random.normal(0.0, 1.0, in_shape).astype(np.float32)
 
         channel_dim = 1
-        for dim in range(begin_norm_axis, 4):
+        for dim in range(begin_norm_axis, len(in_shape)):
             channel_dim = channel_dim * in_shape[dim]
 
         def generate_scale(*args, **kwargs):
@@ -82,28 +85,61 @@ class TestLayerNormOp(AutoScanTest):
         def generate_bias(*args, **kwargs):
             return np.random.random([channel_dim]).astype(np.float32)
 
+        def generate_inputs(target_nnadapter):
+            inputs1 = {}
+            inputs2 = {}
+            if target_nnadapter:
+                inputs1 = {"X": ["input_data"]}
+                inputs2 = {
+                    "input_data":
+                    TensorConfig(data_gen=partial(generate_input)),
+                }
+            else:
+                inputs1 = {
+                    "X": ["input_data"],
+                    "Scale": ["scale_data"],
+                    "Bias": ["bias_data"]
+                }
+                inputs2 = {
+                    "input_data":
+                    TensorConfig(data_gen=partial(generate_input)),
+                    "scale_data":
+                    TensorConfig(data_gen=partial(generate_scale)),
+                    "bias_data": TensorConfig(data_gen=partial(generate_bias))
+                }
+            return [inputs1, inputs2]
+
+        def generate_attrs(target_nnadapter):
+            attrs = {}
+            if target_nnadapter:
+                attrs = {
+                    "epsilon": epsilon,
+                    "Scale": generate_scale(),
+                    "Bias": generate_bias(),
+                    "begin_norm_axis": begin_norm_axis
+                }
+            else:
+                attrs = {
+                    "epsilon": epsilon,
+                    "begin_norm_axis": begin_norm_axis
+                }
+            return attrs
+
+        inputs = generate_inputs(self.get_target() == 'NNAdapter')
+        attrs = generate_attrs(self.get_target() == 'NNAdapter')
         run_op = OpConfig(
             type="layer_norm",
-            inputs={
-                "X": ["input_data"],
-                "Scale": ["scale_data"],
-                "Bias": ["bias_data"]
-            },
+            inputs=inputs[0],
             outputs={
                 "Y": ["output_data"],
                 "Mean": ["mean_data"],
                 "Variance": ["variance_data"],
             },
-            attrs={"epsilon": epsilon,
-                   "begin_norm_axis": begin_norm_axis})
+            attrs=attrs)
         program_config = ProgramConfig(
             ops=[run_op],
             weights={},
-            inputs={
-                "input_data": TensorConfig(data_gen=partial(generate_input)),
-                "scale_data": TensorConfig(data_gen=partial(generate_scale)),
-                "bias_data": TensorConfig(data_gen=partial(generate_bias)),
-            },
+            inputs=inputs[1],
             outputs=["output_data", "mean_data", "variance_data"])
         return program_config
 

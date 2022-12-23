@@ -68,6 +68,16 @@ void PReluCompute<PRECISION(kFP16)>::Run() {
                                               alpha_data,
                                               ctx.threads());
 }
+template <>
+void TanhCompute<PRECISION(kFP16)>::Run() {
+  auto& param = this->Param<param_t>();
+  auto& ctx = this->ctx_->template As<ARMContext>();
+  auto x_dims = param.X->dims();
+  auto x_data = param.X->data<float16_t>();
+  auto output_data = param.Out->mutable_data<float16_t>();
+  lite::arm::math::fp16::act_tanh<float16_t>(
+      x_data, output_data, x_dims.production(), ctx.threads());
+}
 #endif
 
 void LeakyReluCompute::Run() {
@@ -115,7 +125,8 @@ void SigmoidCompute::Run() {
       x_data, output_data, x_dims.production(), ctx.threads());
 }
 
-void TanhCompute::Run() {
+template <>
+void TanhCompute<PRECISION(kFloat)>::Run() {
   auto& param = this->Param<param_t>();
   auto& ctx = this->ctx_->template As<ARMContext>();
   auto x_dims = param.X->dims();
@@ -158,6 +169,16 @@ void EluCompute::Run() {
       x_data, output_data, x_dims.production(), alpha, ctx.threads());
 }
 
+void SiluCompute::Run() {
+  auto& param = this->Param<param_t>();
+  auto& ctx = this->ctx_->template As<ARMContext>();
+  auto x_dims = param.X->dims();
+  auto x_data = param.X->data<float>();
+  auto output_data = param.Out->mutable_data<float>();
+  lite::arm::math::act_silu<float>(
+      x_data, output_data, x_dims.production(), ctx.threads());
+}
+
 }  // namespace arm
 }  // namespace kernels
 }  // namespace lite
@@ -181,6 +202,16 @@ REGISTER_LITE_KERNEL(prelu,
                      def)
     .BindInput("X", {LiteType::GetTensorTy(TARGET(kARM), PRECISION(kFP16))})
     .BindInput("Alpha", {LiteType::GetTensorTy(TARGET(kARM), PRECISION(kFP16))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kARM), PRECISION(kFP16))})
+    .Finalize();
+
+REGISTER_LITE_KERNEL(tanh,
+                     kARM,
+                     kFP16,
+                     kNCHW,
+                     paddle::lite::kernels::arm::TanhCompute<PRECISION(kFP16)>,
+                     def)
+    .BindInput("X", {LiteType::GetTensorTy(TARGET(kARM), PRECISION(kFP16))})
     .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kARM), PRECISION(kFP16))})
     .Finalize();
 #endif  // ENABLE_ARM_FP16
@@ -227,8 +258,12 @@ REGISTER_LITE_KERNEL(sigmoid,
     .BindInput("X", {LiteType::GetTensorTy(TARGET(kARM))})
     .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kARM))})
     .Finalize();
-REGISTER_LITE_KERNEL(
-    tanh, kARM, kFloat, kNCHW, paddle::lite::kernels::arm::TanhCompute, def)
+REGISTER_LITE_KERNEL(tanh,
+                     kARM,
+                     kFloat,
+                     kNCHW,
+                     paddle::lite::kernels::arm::TanhCompute<PRECISION(kFloat)>,
+                     def)
     .BindInput("X", {LiteType::GetTensorTy(TARGET(kARM))})
     .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kARM))})
     .Finalize();
@@ -248,6 +283,11 @@ REGISTER_LITE_KERNEL(thresholded_relu,
     .Finalize();
 REGISTER_LITE_KERNEL(
     elu, kARM, kFloat, kNCHW, paddle::lite::kernels::arm::EluCompute, def)
+    .BindInput("X", {LiteType::GetTensorTy(TARGET(kARM))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kARM))})
+    .Finalize();
+REGISTER_LITE_KERNEL(
+    silu, kARM, kFloat, kNCHW, paddle::lite::kernels::arm::SiluCompute, def)
     .BindInput("X", {LiteType::GetTensorTy(TARGET(kARM))})
     .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kARM))})
     .Finalize();

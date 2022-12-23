@@ -4,11 +4,15 @@
 
 1、编译 Paddle Lite 报错怎么办？
 
-答：不推荐用户自己编译，推荐使用预编译库 [Paddle Lite 预编译库下载](https://paddle-lite.readthedocs.io/zh/latest/quick_start/release_lib.html)
+答：不推荐用户自己编译，推荐使用预编译库 [Paddle Lite 预编译库下载](./release_lib)
 
 2、遇到 Check failed: op: no Op found for xxx Aborted (core dumped) 问题怎么办？
 
 答：更换当前 Paddle Lite 预测库为带 `with_extra = ON` 标签的预编译库。
+
+3、ARM CPU 端多线程支持情况，某些case下，多线程没有效果？
+
+答：gcc 编译模式下，V7/V8 多线程均支持；clang 编译模式下，V8 支持多线程，V7 只支持单线程
 
 ### 模型转换
 
@@ -28,7 +32,7 @@
 
 1、Paddle Lite 相关资料：
 
-答：Paddle Lite 文档 [Paddle Lite 文档链接](https://paddle-lite.readthedocs.io/zh/latest/)。  
+答：Paddle Lite 文档 [Paddle Lite 文档链接](https://www.paddlepaddle.org.cn/lite)。  
    Paddle Lite 各平台应用示例 [Paddle Lite 应用示例链接](https://github.com/PaddlePaddle/Paddle-Lite-Demo)。
 
 2、Paddle Lite 如何加载动态图模型？

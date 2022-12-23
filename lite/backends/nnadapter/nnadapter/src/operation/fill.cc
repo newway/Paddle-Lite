@@ -17,13 +17,33 @@
 #include "utility/debug.h"
 #include "utility/hints.h"
 #include "utility/logging.h"
+#include "utility/micros.h"
 #include "utility/modeling.h"
 #include "utility/utility.h"
 
 namespace nnadapter {
 namespace operation {
 
-int PrepareFill(core::Operation* operation) {
+NNADAPTER_EXPORT bool ValidateFill(const core::Operation* operation) {
+  return true;
+}
+
+NNADAPTER_EXPORT int ExecuteFill(core::Operation* operation) {
+  FILL_OPERATION_EXTRACT_INPUTS_OUTPUTS
+
+  // Allocate and calculate the output operands
+  auto out_buffer = reinterpret_cast<uint8_t*>(AllocateOperand(output_operand));
+  auto out_length = output_operand->length;
+  auto value_buffer = reinterpret_cast<uint8_t*>(value_operand->buffer);
+  auto value_length = value_operand->length;
+  for (int i = 0; i < out_length; i += value_length) {
+    memcpy(out_buffer, value_buffer, value_length);
+    out_buffer += value_length;
+  }
+  return NNADAPTER_NO_ERROR;
+}
+
+NNADAPTER_EXPORT int PrepareFill(core::Operation* operation) {
   FILL_OPERATION_EXTRACT_INPUTS_OUTPUTS
 
   // Infer the shape and type of output operands
@@ -66,6 +86,12 @@ int PrepareFill(core::Operation* operation) {
   }
   output_type.precision = value_operand->type.precision;
   output_type.lifetime = NNADAPTER_TEMPORARY_VARIABLE;
+
+  if (IsConstantOperand(shape_operand) && IsConstantOperand(value_operand)) {
+    ExecuteFill(operation);
+    output_type.lifetime = NNADAPTER_CONSTANT_COPY;
+  }
+
   NNADAPTER_VLOG(5) << "output: " << OperandToString(output_operand);
   return NNADAPTER_NO_ERROR;
 }

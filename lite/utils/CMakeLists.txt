@@ -31,14 +31,10 @@ endif()
 # 2.opencv-source code will be included if LITE_WITH_CV
 if(LITE_WITH_CV AND LITE_WITH_ARM)
   set(UTILS_SRC ${UTILS_SRC} ${CV_ARM_SRC})
-  if(LITE_WITH_FPGA)
-    set(UTILS_SRC ${UTILS_SRC} ${CV_FPGA_SRC})
-    set(UTILS_DEPS ${UTILS_DEPS} ${kernel_fpga})
-  endif()
 endif()
 
 # 3. self-defined log will be included in tiny_publish mode
-if(LITE_WITH_ARM OR LITE_ON_MODEL_OPTIMIZE_TOOL OR LITE_WITH_PYTHON OR (NOT LITE_WITH_LOG))
+if(LITE_WITH_ARM OR LITE_ON_MODEL_OPTIMIZE_TOOL OR LITE_WITH_PYTHON OR LITE_WITH_XPU OR (NOT LITE_WITH_LOG))
   set(UTILS_SRC ${UTILS_SRC} ${LOG_SRC})
   lite_cc_test(test_logging SRCS ${CMAKE_CURRENT_SOURCE_DIR}/log/logging_test.cc)
 else()
@@ -58,9 +54,6 @@ lite_cc_test(test_utils_string SRCS string_test.cc)
 lite_cc_test(test_fast_type_id SRCS fast_type_id_test.cc)
 # fp16 unit test
 if (WITH_TESTING)
-    if (LITE_WITH_CUDA)
-      nv_test(float16_gpu_test SRCS float16_test.cu)
-    endif()
     lite_cc_test(float16_test SRCS float16_test.cc)
 endif()
 

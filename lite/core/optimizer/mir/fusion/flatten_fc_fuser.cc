@@ -32,10 +32,12 @@ void FlattenFcFuser::BuildPattern() {
   PMNode* out = VarNode("output")
                     ->assert_is_op_output("flatten_contiguous_range", "Out")
                     ->AsIntermediate();
-  PMNode* xshape =
-      VarNode("xshape")
-          ->assert_is_op_output("flatten_contiguous_range", "XShape")
-          ->AsIntermediate();
+  PMNode* xshape;
+  if (has_xshape_) {
+    xshape = VarNode("xshape")
+                 ->assert_is_op_output("flatten_contiguous_range", "XShape")
+                 ->AsIntermediate();
+  }
 
   // fc
   // PMNode* input   = VarNode("input")->assert_is_op_input("fc",
@@ -50,7 +52,9 @@ void FlattenFcFuser::BuildPattern() {
   // create topology.
   std::vector<PMNode*> fc_inputs{bias, weights, out};
   *x >> *flatten_contiguous_range >> *out;
-  *flatten_contiguous_range >> *xshape;
+  if (has_xshape_) {
+    *flatten_contiguous_range >> *xshape;
+  }
   fc_inputs >> *fc >> *fc_out;
 }
 
@@ -93,6 +97,8 @@ cpp::OpDesc FlattenFcFuser::GenOpDesc(const key2nodes_t& matched) {
   op_desc.SetOutput("Out", {matched.at("fc_out")->arg()->name});
   auto in_num_col_dim = op_desc.GetAttr<int>("in_num_col_dims");
   op_desc.SetAttr("in_num_col_dims", in_num_col_dim);
+  std::string op_type = "mul";
+  op_desc.SetAttr("op_type", op_type);
   return op_desc;
 }
 

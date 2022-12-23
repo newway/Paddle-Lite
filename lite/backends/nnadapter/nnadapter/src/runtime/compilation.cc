@@ -44,30 +44,54 @@ static const char* NNADAPTER_RUNTIME_CACHE_CACHE_OUTPUT_INDEXES_KEY =
 static const char* NNADAPTER_RUNTIME_CACHE_CACHE_MODEL_BUFFER_KEY =
     "cache_%d_model_buffer";
 
-void* AccessInputOperand(void* memory, NNAdapterOperandType* type) {
+void* AccessSubmodelInput(void* memory,
+                          NNAdapterOperandType* type,
+                          void* device_buffer) {
   NNADAPTER_CHECK(memory);
   NNADAPTER_CHECK(type);
-  auto operand = static_cast<core::Operand*>(memory);
-  CopyOperandType(type, operand->type);
-  return operand->buffer;
+  auto buffer = static_cast<Compilation::Buffer*>(memory);
+  auto dimension_count = buffer->dimensions.size();
+  NNADAPTER_CHECK_GT(dimension_count, 0);
+  memcpy(type->dimensions.data,
+         buffer->dimensions.data(),
+         dimension_count * sizeof(int32_t));
+  type->dimensions.count = dimension_count;
+  NNADAPTER_CHECK(buffer->data);
+  NNADAPTER_VLOG(5) << "Input:" << std::endl
+                    << OperandTypeToString(type) << std::endl
+                    << " data=@0x" << std::hex
+                    << reinterpret_cast<int64_t>(buffer->data);
+  return buffer->data;
 }
 
-void* AccessOutputOperand(void* memory, NNAdapterOperandType* type) {
+void* AccessSubmodelOutput(void* memory,
+                           NNAdapterOperandType* type,
+                           void* device_buffer) {
   NNADAPTER_CHECK(memory);
   NNADAPTER_CHECK(type);
-  auto operand = static_cast<core::Operand*>(memory);
-  CopyOperandType(&operand->type, *type);
-  auto length = GetOperandTypeBufferLength(operand->type);
-  if (operand->length < length) {
-    if (operand->buffer) {
-      free(operand->buffer);
+  auto buffer = static_cast<Compilation::Buffer*>(memory);
+  auto dimension_count = type->dimensions.count;
+  NNADAPTER_CHECK_GT(dimension_count, 0);
+  buffer->dimensions.resize(dimension_count);
+  memcpy(buffer->dimensions.data(),
+         type->dimensions.data,
+         dimension_count * sizeof(int32_t));
+  auto length = GetOperandTypeBufferLength(*type);
+  if (buffer->size < length) {
+    if (buffer->data) {
+      free(buffer->data);
     }
-    operand->buffer = malloc(length);
-    NNADAPTER_CHECK(operand->buffer) << "Failed to allocate " << length
-                                     << " bytes, out of memory!";
-    operand->length = length;
+    buffer->data = malloc(length);
+    NNADAPTER_CHECK(buffer->data) << "Failed to allocate " << length
+                                  << " bytes, out of memory!";
+    buffer->size = length;
   }
-  return operand->buffer;
+  NNADAPTER_CHECK(buffer->data);
+  NNADAPTER_VLOG(5) << "Output:" << std::endl
+                    << OperandTypeToString(type) << std::endl
+                    << " data=@0x" << std::hex
+                    << reinterpret_cast<int64_t>(buffer->data);
+  return buffer->data;
 }
 
 Compilation::Program::~Program() {
@@ -115,25 +139,15 @@ Compilation::Compilation(Model* model,
   }
 }
 
-Compilation::~Compilation() {
-  for (auto& operand : operands_) {
-    NNADAPTER_CHECK(operand);
-    ClearOperand(operand);
-    if (operand->buffer) {
-      free(operand->buffer);
-    }
-    delete operand;
-  }
-}
-
 int Compilation::Execute(std::vector<core::Argument>* input_arguments,
                          std::vector<core::Argument>* output_arguments) {
   auto create_program_arguments = [&](
       std::vector<core::Argument>* args,
       const std::vector<int>& indexes,
       std::vector<core::Argument>* arguments,
-      std::vector<core::Operand*>* operands,
-      void* (*access)(void* memory, NNAdapterOperandType* type)) {
+      std::vector<std::shared_ptr<Buffer>>* buffers,
+      void* (*access)(
+          void* memory, NNAdapterOperandType* type, void* device_buffer)) {
     for (size_t i = 0; i < indexes.size(); i++) {
       core::Argument arg;
       arg.index = i;
@@ -151,14 +165,13 @@ int Compilation::Execute(std::vector<core::Argument>* input_arguments,
         }
         NNADAPTER_CHECK(found) << "No matched argument found!";
       } else {
-        for (int j = operands->size(); j <= pos; j++) {
-          auto operand = new core::Operand();
-          NNADAPTER_CHECK(operand)
+        for (int j = buffers->size(); j <= pos; j++) {
+          auto buffer = std::make_shared<Compilation::Buffer>();
+          NNADAPTER_CHECK(buffer)
               << "Failed to allocate memory for a operand, out of memory!";
-          memset(operand, 0, sizeof(core::Operand));
-          operands->push_back(operand);
+          buffers->push_back(buffer);
         }
-        arg.memory = operands->at(pos);
+        arg.memory = buffers->at(pos).get();
         arg.access = access;
       }
       args->push_back(arg);
@@ -173,13 +186,13 @@ int Compilation::Execute(std::vector<core::Argument>* input_arguments,
     create_program_arguments(&input_args,
                              programs_[i].input_indexes,
                              input_arguments,
-                             &operands_,
-                             AccessInputOperand);
+                             &buffers_,
+                             AccessSubmodelInput);
     create_program_arguments(&output_args,
                              programs_[i].output_indexes,
                              output_arguments,
-                             &operands_,
-                             AccessOutputOperand);
+                             &buffers_,
+                             AccessSubmodelOutput);
     auto result = device_context->device->ExecuteProgram(programs_[i].program,
                                                          input_args.size(),
                                                          input_args.data(),
@@ -191,9 +204,9 @@ int Compilation::Execute(std::vector<core::Argument>* input_arguments,
         << "th compiled program on the device '"
         << device_context->device->GetName() << "'";
   }
-  // Serialize the cache models into the file or memory at the first iteration
-  if (model_ && CheckCache()) {
-    if (!cache_token_.empty() && !cache_dir_.empty()) {
+  if (CheckCache()) {
+    // Serialize the cache models into the file or memory at the first iteration
+    if (model_ && !cache_token_.empty() && !cache_dir_.empty()) {
       bool skip = false;
       auto cache_count = programs_.size();
       for (size_t i = 0; i < cache_count; i++) {
@@ -219,7 +232,9 @@ int Compilation::Execute(std::vector<core::Argument>* input_arguments,
         }
       }
     }
-    ClearCache();  // Clear the caches to reduce memory usage
+    // Clear the cache models to reduce memory consumption when the device
+    // program is first executed.
+    ClearCache();
   }
   return NNADAPTER_NO_ERROR;
 }
@@ -229,6 +244,7 @@ int Compilation::Finish() {
   completed_ = true;
   if (model_) {
     programs_.clear();
+    buffers_.clear();
     std::vector<std::pair<
         Context::DeviceContext*,
         std::tuple<core::Model*, bool, std::vector<int>, std::vector<int>>>>
@@ -315,8 +331,8 @@ int Compilation::Finish() {
           << device_context->device->GetName() << "'";
     }
   } else {
-    NNADAPTER_LOG(WARNING)
-        << "Failed to create a program, No model and cache is provided.";
+    NNADAPTER_LOG(WARNING) << "Warning: Failed to create a program, No model "
+                              "and cache is provided.";
     return NNADAPTER_INVALID_PARAMETER;
   }
   return NNADAPTER_NO_ERROR;
@@ -528,6 +544,7 @@ bool Compilation::Serialize(std::vector<uint8_t>* buffer) {
 
 bool Compilation::Deserialize(void* buffer, uint64_t size) {
   programs_.clear();
+  buffers_.clear();
   input_types_.clear();
   output_types_.clear();
   auto helper = std::make_shared<nnadapter::Cache>();

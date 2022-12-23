@@ -34,9 +34,11 @@ NNADAPTER_EXPORT void ClearModel(core::Model* model) {
 }
 
 NNADAPTER_EXPORT void ClearOperand(core::Operand* operand) {
-  if (operand->type.lifetime == NNADAPTER_CONSTANT_COPY && operand->buffer) {
+  if (operand->type.lifetime != NNADAPTER_CONSTANT_REFERENCE &&
+      operand->buffer && operand->length > 0) {
     free(operand->buffer);
     operand->buffer = nullptr;
+    operand->length = 0;
   }
   if (IsPerChannelQuantType(operand->type.precision) &&
       operand->type.symm_per_channel_params.scales) {
@@ -69,21 +71,7 @@ NNADAPTER_EXPORT void RemoveOperand(core::Model* model,
                                     core::Operand* operand) {
   for (auto it = model->operands.begin(); it != model->operands.end();) {
     if (&(*it) == operand) {
-      if ((operand->type.lifetime == NNADAPTER_CONSTANT_COPY ||
-           operand->type.lifetime == NNADAPTER_TEMPORARY_SHAPE) &&
-          operand->buffer) {
-        free(operand->buffer);
-      }
-      if ((operand->type.precision == NNADAPTER_QUANT_INT8_SYMM_PER_CHANNEL ||
-           operand->type.precision == NNADAPTER_QUANT_INT32_SYMM_PER_CHANNEL) &&
-          operand->type.symm_per_channel_params.scales) {
-        free(operand->type.symm_per_channel_params.scales);
-      }
-      for (size_t i = 0; i < core::NNADAPTER_MAX_SIZE_OF_HINTS; i++) {
-        if (operand->hints[i].handler) {
-          operand->hints[i].deleter(&operand->hints[i].handler);
-        }
-      }
+      ClearOperand(operand);
       it = model->operands.erase(it);
     } else {
       ++it;
@@ -100,6 +88,27 @@ NNADAPTER_EXPORT void RemoveOperation(core::Model* model,
       ++it;
     }
   }
+}
+
+NNADAPTER_EXPORT void* AllocateOperand(core::Operand* operand) {
+  if (operand->type.lifetime == NNADAPTER_CONSTANT_REFERENCE) {
+    operand->type.lifetime = NNADAPTER_CONSTANT_COPY;
+    operand->buffer = nullptr;
+    operand->length = 0;
+  }
+  auto length = GetOperandTypeBufferLength(operand->type);
+  if (operand->length < length) {
+    if (operand->buffer) {
+      free(operand->buffer);
+    }
+    operand->buffer = malloc(length);
+    NNADAPTER_CHECK(operand->buffer) << "Failed to allocate " << length
+                                     << " bytes, out of memory!";
+    operand->length = length;
+  }
+  NNADAPTER_CHECK(operand->buffer);
+  NNADAPTER_CHECK_GT(operand->length, 0);
+  return operand->buffer;
 }
 
 static core::Operand* AddOperand(core::Model* model,
@@ -125,7 +134,12 @@ static core::Operand* AddOperand(core::Model* model,
     if (quant_scale_count > 1) {
       // Symmetric per-channel quantization
       NNADAPTER_CHECK(!zero_point && IsSymmPerChannelQuantType(precision));
-      operand->type.symm_per_channel_params.scales = quant_scales;
+      float* scales =
+          reinterpret_cast<float*>(malloc(quant_scale_count * sizeof(float)));
+      NNADAPTER_CHECK(scales) << "Failed to allocate the Symmetric per-channel "
+                                 "scale buffer for a operand.";
+      memcpy(scales, quant_scales, quant_scale_count * sizeof(float));
+      operand->type.symm_per_channel_params.scales = scales;
       operand->type.symm_per_channel_params.scale_count = quant_scale_count;
       operand->type.symm_per_channel_params.channel_dim = quant_channel_dim;
     } else {
@@ -526,6 +540,18 @@ NNADAPTER_EXPORT bool IsConstantOperand(core::Operand* operand) {
          operand->type.lifetime == NNADAPTER_CONSTANT_REFERENCE;
 }
 
+NNADAPTER_EXPORT bool IsConstantCopyOperand(core::Operand* operand) {
+  return operand->type.lifetime == NNADAPTER_CONSTANT_COPY;
+}
+
+NNADAPTER_EXPORT bool IsConstantReferenceOperand(core::Operand* operand) {
+  return operand->type.lifetime == NNADAPTER_CONSTANT_REFERENCE;
+}
+
+NNADAPTER_EXPORT bool IsTemporaryVariableOperand(core::Operand* operand) {
+  return operand->type.lifetime == NNADAPTER_TEMPORARY_VARIABLE;
+}
+
 NNADAPTER_EXPORT bool IsTemporaryShapeOperand(core::Operand* operand) {
   return operand->type.lifetime == NNADAPTER_TEMPORARY_SHAPE;
 }
@@ -706,6 +732,7 @@ NNADAPTER_EXPORT core::Operand* InsertReshapeOperation(
 
 core::Operand* AddDummyOperation(core::Model* model,
                                  core::Operand* reference_operand,
+                                 NNAdapterOperationType operation_type,
                                  bool after = true) {
   auto target_operand = AddOperand(model);
   CopyOperandType(&target_operand->type, reference_operand->type);
@@ -728,7 +755,7 @@ core::Operand* AddDummyOperation(core::Model* model,
   auto fuse_code_operand = AddInt32ConstantOperand(model, 0);
   // Insert a new ADD operation
   auto dummy_add_operation = AddOperation(model);
-  dummy_add_operation->type = NNADAPTER_ADD;
+  dummy_add_operation->type = operation_type;
   dummy_add_operation->input_operands = {
       after ? reference_operand : target_operand,
       zero_operand,
@@ -738,14 +765,24 @@ core::Operand* AddDummyOperation(core::Model* model,
   return target_operand;
 }
 
-NNADAPTER_EXPORT core::Operand* AppendDummyOperation(
+NNADAPTER_EXPORT core::Operand* AppendDummyAddOperation(
     core::Model* model, core::Operand* input_operand) {
-  return AddDummyOperation(model, input_operand, true);
+  return AddDummyOperation(model, input_operand, NNADAPTER_ADD, true);
 }
 
-NNADAPTER_EXPORT core::Operand* InsertDummyOperation(
+NNADAPTER_EXPORT core::Operand* InsertDummyAddOperation(
     core::Model* model, core::Operand* output_operand) {
-  return AddDummyOperation(model, output_operand, false);
+  return AddDummyOperation(model, output_operand, NNADAPTER_ADD, false);
+}
+
+NNADAPTER_EXPORT core::Operand* AppendDummySubOperation(
+    core::Model* model, core::Operand* input_operand) {
+  return AddDummyOperation(model, input_operand, NNADAPTER_SUB, true);
+}
+
+NNADAPTER_EXPORT core::Operand* InsertDummySubOperation(
+    core::Model* model, core::Operand* output_operand) {
+  return AddDummyOperation(model, output_operand, NNADAPTER_SUB, false);
 }
 
 core::Operand* AddUnaryOperation(core::Model* model,
@@ -858,6 +895,35 @@ NNADAPTER_EXPORT core::Operand* InsertRequantOperation(
   return AddRequantOperation(model, output_operand, input_quant_params, false);
 }
 
+core::Operand* AddSoftmaxOperation(core::Model* model,
+                                   core::Operand* reference_operand,
+                                   int32_t axis = -1,
+                                   bool after = true) {
+  auto target_operand = AddOperand(model);
+  CopyOperandType(&target_operand->type, reference_operand->type);
+  if (!IsTemporaryShapeOperand(reference_operand)) {
+    target_operand->type.lifetime = NNADAPTER_TEMPORARY_VARIABLE;
+  }
+  auto softmax_operation = AddOperation(model);
+  softmax_operation->type = NNADAPTER_SOFTMAX;
+  auto axis_operand = AddInt32ConstantOperand(model, axis);
+  softmax_operation->input_operands = {
+      after ? reference_operand : target_operand, axis_operand};
+  softmax_operation->output_operands = {after ? target_operand
+                                              : reference_operand};
+  return target_operand;
+}
+
+NNADAPTER_EXPORT core::Operand* AppendSoftmaxOperation(
+    core::Model* model, core::Operand* input_operand, int32_t axis) {
+  return AddSoftmaxOperation(model, input_operand, axis, true);
+}
+
+NNADAPTER_EXPORT core::Operand* InsertSoftmaxOperation(
+    core::Model* model, core::Operand* output_operand, int32_t axis) {
+  return AddSoftmaxOperation(model, output_operand, axis, false);
+}
+
 #define SORT_OPERATIONS_IN_TOPOLOGICAL_ORDER(T)                               \
   NNADAPTER_EXPORT std::vector<T core::Operation*>                            \
   SortOperationsInTopologicalOrder(T core::Model* model) {                    \
@@ -915,6 +981,8 @@ NNADAPTER_EXPORT core::Operand* InsertRequantOperation(
 
 SORT_OPERATIONS_IN_TOPOLOGICAL_ORDER()
 SORT_OPERATIONS_IN_TOPOLOGICAL_ORDER(const)
+
+#undef SORT_OPERATIONS_IN_TOPOLOGICAL_ORDER
 
 static const char* NNADAPTER_RUNTIME_CACHE_CACHE_MODEL_OPERANDS_KEY =
     "operands";

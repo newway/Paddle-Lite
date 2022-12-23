@@ -72,7 +72,7 @@ class LogicalTester : public arena::TestCase {
     }
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType(op_type_);
     op_desc->SetInput("X", {x_});
     if (op_type_ != "logical_not") {
@@ -106,7 +106,8 @@ void TestLogical(Place place, float abs_error) {
   arena::Arena arena_and(std::move(logical_and_tester), place, abs_error);
   arena_and.TestPrecision();
 
-#if !((defined LITE_WITH_XPU) || (defined NNADAPTER_WITH_HUAWEI_ASCEND_NPU))
+#if !((defined LITE_WITH_XPU) || (defined NNADAPTER_WITH_HUAWEI_ASCEND_NPU) || \
+      (defined NNADAPTER_WITH_CAMBRICON_MLU))
   std::unique_ptr<arena::TestCase> logical_or_tester(
       new LogicalTester<_logical_or_func>(place, "def", "logical_or"));
   arena::Arena arena_or(std::move(logical_or_tester), place, abs_error);
@@ -131,6 +132,8 @@ TEST(Logical, precision) {
   place = TARGET(kNNAdapter);
 #if defined(NNADAPTER_WITH_HUAWEI_ASCEND_NPU)
   abs_error = 1e-2;
+#elif defined(NNADAPTER_WITH_CAMBRICON_MLU)
+  abs_error = 1e-3;
 #else
   return;
 #endif

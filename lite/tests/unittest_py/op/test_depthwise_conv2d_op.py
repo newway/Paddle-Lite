@@ -39,6 +39,11 @@ class TestDepthwiseConv2dOp(AutoScanTest):
             PrecisionType.FP16,
             DataLayoutType.NCHW,
             thread=[1, 4])
+        arm_places = [
+            Place(TargetType.ARM, PrecisionType.INT8, DataLayoutType.NCHW),
+            Place(TargetType.ARM, PrecisionType.FP32, DataLayoutType.NCHW)
+        ]
+        self.enable_testing_on_place(places=arm_places, thread=[1, 4])
         x86_valid_places = [
             Place(TargetType.X86, PrecisionType.FP32, DataLayoutType.NCHW),
             Place(TargetType.X86, PrecisionType.INT8, DataLayoutType.NCHW)
@@ -59,8 +64,13 @@ class TestDepthwiseConv2dOp(AutoScanTest):
         ]
         self.enable_testing_on_place(places=opencl_valid_places)
         self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
-        self.enable_devices_on_nnadapter(
-            device_names=["kunlunxin_xtcl", "nvidia_tensorrt"])
+        self.enable_devices_on_nnadapter(device_names=[
+            "kunlunxin_xtcl", "nvidia_tensorrt", "intel_openvino"
+        ])
+        xpu_places = [
+            Place(TargetType.XPU, PrecisionType.FP32, DataLayoutType.NCHW)
+        ]
+        self.enable_testing_on_place(places=xpu_places)
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -74,21 +84,15 @@ class TestDepthwiseConv2dOp(AutoScanTest):
         input_w = draw(st.integers(min_value=1, max_value=128))
         filter_m = input_c
         filter_c = 1
-        filter_h = draw(st.integers(min_value=1, max_value=7))
-        filter_w = draw(st.integers(min_value=1, max_value=7))
+        filter_h = draw(st.sampled_from([3, 5]))
+        filter_w = filter_h
         scale_in = draw(st.floats(min_value=0.001, max_value=0.1))
         scale_out = draw(st.floats(min_value=0.001, max_value=0.1))
         assume(input_h >= filter_h)
         assume(input_w >= filter_w)
         groups = input_c
-        paddings = draw(
-            st.lists(
-                st.integers(
-                    min_value=0, max_value=20), min_size=2, max_size=2))
-        dilations = draw(
-            st.lists(
-                st.integers(
-                    min_value=1, max_value=10), min_size=2, max_size=2))
+        paddings = draw(st.sampled_from([[0, 0], [1, 1], [2, 2]]))
+        dilations = draw(st.sampled_from([[1, 1]]))
         padding_algorithm = draw(st.sampled_from(["VALID", "SAME"]))
         strides = draw(
             st.lists(
@@ -133,6 +137,9 @@ class TestDepthwiseConv2dOp(AutoScanTest):
         def generate_bias(*args, **kwargs):
             return np.random.random([filter_m]).astype(np.float32)
 
+        def generate_zero_bias(*args, **kwargs):
+            return np.zeros([filter_m]).astype(np.float32)
+
         inputs_type = {"Input": ["input_data"], "Filter": ["filter_data"]}
         inputs_data = {
             "input_data": TensorConfig(data_gen=partial(generate_input))
@@ -146,6 +153,11 @@ class TestDepthwiseConv2dOp(AutoScanTest):
                 inputs_type["Bias"] = ["bias_data"]
                 weights_data['bias_data'] = TensorConfig(
                     data_gen=partial(generate_bias))
+
+        if self.get_target() == "XPU":
+            inputs_data["bias_data"] = TensorConfig(
+                data_gen=partial(generate_zero_bias))
+            inputs_type["Bias"] = ["bias_data"]
 
         depthwise_conv2d_op = OpConfig(
             type="depthwise_conv2d",
@@ -170,10 +182,18 @@ class TestDepthwiseConv2dOp(AutoScanTest):
         return program_config
 
     def sample_predictor_configs(self):
-        return self.get_predictor_configs(), ["depthwise_conv2d"], (1e-5, 1e-5)
+        atol, rtol = 1e-5, 1e-5
+        target_str = self.get_target()
+        if target_str == "XPU":
+            atol, rtol = 1e-3, 1e-3
+        elif self.get_nnadapter_device_name() == "kunlunxin_xtcl":
+            atol, rtol = 1e-3, 1e-3
+        return self.get_predictor_configs(), ["depthwise_conv2d"], (atol, rtol)
 
     def add_ignore_pass_case(self):
         def skip_bias_teller(program_config, predictor_config):
+            if self.get_target() == "XPU":
+                return False
             if "Bias" in program_config.ops[0].inputs.keys():
                 return True
             return False

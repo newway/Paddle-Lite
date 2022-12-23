@@ -17,9 +17,12 @@
 #include <NvInfer.h>
 #include <NvInferPlugin.h>
 #include <cuda_runtime_api.h>
+#include <cudnn.h>
 #include <memory>
 #include <vector>
 #include "core/types.h"
+#include "driver/nvidia_tensorrt/operation/type.h"
+#include "utility/debug.h"
 #include "utility/logging.h"
 
 namespace nnadapter {
@@ -48,18 +51,99 @@ namespace nvidia_tensorrt {
 #define NVIDIA_TENSORRT_CALIBRATION_TABLE_PATH \
   "NVIDIA_TENSORRT_CALIBRATION_TABLE_PATH"
 
+// Max workspace size, for example: "1048576"
+#define NVIDIA_TENSORRT_MAX_WORKSPACE_SIZE "NVIDIA_TENSORRT_MAX_WORKSPACE_SIZE"
+
+#define NVIDIA_TENSORRT_GET_EXTERNAL_CUDA_STREAM 0x0100
+
+#define TENSORRT_VERSION_GE(major, minor, patch, build)          \
+  (((NV_TENSORRT_MAJOR > major) ||                               \
+    (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR > minor) || \
+    (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
+     NV_TENSORRT_PATCH > patch) ||                               \
+    (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
+     NV_TENSORRT_PATCH == patch && NV_TENSORRT_BUILD >= build)))
+
+#if TENSORRT_VERSION_GE(8, 0, 0, 0)
+#define TRT_NOEXCEPT noexcept
+#else
+#define TRT_NOEXCEPT
+#endif
+
+// Supported places
+typedef enum {
+  kTensorrt = 0,
+  kCUDA = 1,
+  kHost = 2,
+} DeviceType;
+
+// Tensorrt precision mode options
 typedef enum {
   kFloat32 = 0,
   kFloat16 = 1,
   kInt8 = 2,
 } PrecisionMode;
 
+struct TensorrtDeleter {
+  template <typename T>
+  void operator()(T* obj) const {
+#if TENSORRT_VERSION_GE(8, 0, 0, 0)
+    delete obj;
+#else
+    if (obj) {
+      obj->destroy();
+    }
+#endif
+  }
+};
+
+struct HostMemoryDeleter {
+  template <typename T>
+  void operator()(T* ptr) const {
+    if (ptr) {
+      free(ptr);
+    }
+  }
+};
+
+class Tensor {
+ public:
+  Tensor() {}
+  ~Tensor();
+
+  void SetData(void* cuda_buffer,
+               const std::vector<int32_t>& dims,
+               nvinfer1::DataType data_type);
+
+  // Only support copy from cuda to host
+  void* Data(bool return_cuda_buffer = true);
+
+  void Resize(const std::vector<int32_t>& dims) { dims_ = dims; }
+
+  std::vector<int32_t> Dims() { return dims_; }
+
+  uint32_t Length();
+
+  void SetDataType(nvinfer1::DataType data_type) { data_type_ = data_type; }
+
+  nvinfer1::DataType DateType() { return data_type_; }
+
+ private:
+  void* cuda_buffer_{nullptr};
+  uint32_t cuda_buffer_length_{0};
+  bool own_cuda_buffer_{true};
+  std::unique_ptr<void, HostMemoryDeleter> host_buffer_;
+  uint32_t host_buffer_length_{0};
+  nvinfer1::DataType data_type_{nvinfer1::DataType::kFLOAT};
+  std::vector<int32_t> dims_;
+};
+
 class TrtLogger : public nvinfer1::ILogger {
  public:
   void log(nvinfer1::ILogger::Severity severity,
-           const char* msg) noexcept override;
+           const char* msg) TRT_NOEXCEPT override;
 
-  static TrtLogger* Global() noexcept {
+  static TrtLogger* Global() TRT_NOEXCEPT {
     static TrtLogger* logger = new TrtLogger;
     return logger;
   }
@@ -93,6 +177,22 @@ template <typename T>
 void Deserialize(const void** buffer,
                  size_t* buffer_size,
                  std::vector<T>* value);
+
+// Only remain min/opt/max shapes
+void ConvertDynamicDimensions(NNAdapterOperandDimensionType* dimensions);
+
+int GetMaxBatchSize(const NNAdapterOperandDimensionType& dimensions);
+
+core::Argument* FindArgumentByIndex(core::Argument* arguments,
+                                    int index,
+                                    uint32_t count);
+
+std::vector<int32_t> GetAlignedDims(
+    const NNAdapterOperandDimensionType& target_dimensions,
+    const NNAdapterOperandDimensionType& reference_dimensions);
+
+nvinfer1::Dims ConvertToNVDims(const NNAdapterOperandDimensionType& dimensions,
+                               bool ignore_batch = true);
 
 }  // namespace nvidia_tensorrt
 }  // namespace nnadapter

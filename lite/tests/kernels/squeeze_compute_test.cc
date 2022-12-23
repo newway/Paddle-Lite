@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include "lite/api/paddle_use_kernels.h"
 #include "lite/api/paddle_use_ops.h"
 #include "lite/core/test/arena/framework.h"
@@ -86,7 +87,7 @@ class SqueezeComputeTester : public arena::TestCase {
     memcpy(out_data, input_data, sizeof(float) * dims_.production());
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType("squeeze");
     op_desc->SetInput("X", {x_});
     op_desc->SetOutput("Out", {out_});
@@ -177,7 +178,7 @@ class Squeeze2ComputeTester : public arena::TestCase {
     memcpy(out_data, input_data, sizeof(float) * dims_.production());
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType("squeeze2");
     op_desc->SetInput("X", {x_});
     op_desc->SetOutput("Out", {out_});
@@ -218,13 +219,18 @@ void test_squeeze(Place place, float abs_error) {
 
 void test_squeeze2(Place place, float abs_error) {
   for (std::vector<int> axes : {std::vector<int>({}),
-                                std::vector<int>({0}),
+                                std::vector<int>({2}),
                                 std::vector<int>({0, -2})}) {
     for (int N : {1}) {
       for (int C : {3}) {
         for (int H : {1}) {
           for (int W : {5}) {
             for (bool inplace : {true, false}) {
+#ifdef NNADAPTER_WITH_NVIDIA_TENSORRT
+              if (std::find(axes.begin(), axes.end(), 0) != axes.end())
+                continue;
+              if (axes.empty()) continue;
+#endif
               std::unique_ptr<arena::TestCase> tester(new Squeeze2ComputeTester(
                   place, "def", axes, DDim({N, C, H, W}), inplace));
               arena::Arena arena(std::move(tester), place, abs_error);
@@ -252,6 +258,10 @@ TEST(squeeze, precision) {
   abs_error = 5e-2;
 #elif defined(NNADAPTER_WITH_HUAWEI_KIRIN_NPU)
   abs_error = 5e-2;
+#elif defined(NNADAPTER_WITH_INTEL_OPENVINO)
+  abs_error = 1e-5;
+#elif defined(NNADAPTER_WITH_QUALCOMM_QNN)
+  abs_error = 1e-2;
 #else
   return;
 #endif
@@ -275,6 +285,8 @@ TEST(squeeze2, precision) {
   place = TARGET(kNNAdapter);
 #if defined(NNADAPTER_WITH_HUAWEI_ASCEND_NPU)
   abs_error = 5e-2;
+#elif defined(NNADAPTER_WITH_NVIDIA_TENSORRT)
+  abs_error = 5e-2;
 #elif defined(NNADAPTER_WITH_CAMBRICON_MLU)
   abs_error = 5e-2;
   // TODO(shentanyue): support later
@@ -283,6 +295,10 @@ TEST(squeeze2, precision) {
   abs_error = 5e-2;
 #elif defined(NNADAPTER_WITH_HUAWEI_KIRIN_NPU)
   abs_error = 5e-2;
+#elif defined(NNADAPTER_WITH_INTEL_OPENVINO)
+  abs_error = 1e-5;
+#elif defined(NNADAPTER_WITH_QUALCOMM_QNN)
+  abs_error = 1e-2;
 #else
   return;
 #endif

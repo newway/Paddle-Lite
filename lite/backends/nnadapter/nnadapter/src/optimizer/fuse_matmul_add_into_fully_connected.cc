@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <map>
 #include <vector>
+#include "optimizer/pattern_matcher.h"
 #include "utility/debug.h"
 #include "utility/logging.h"
 #include "utility/micros.h"
@@ -24,98 +25,214 @@
 
 namespace nnadapter {
 
-NNADAPTER_EXPORT void FuseMatMulAddIntoFullyConnected(core::Model* model) {
-  std::vector<core::Operation*> operations =
-      SortOperationsInTopologicalOrder(model);
-  for (auto operation : operations) {
-    NNADAPTER_VLOG(5) << "Converting " << OperationTypeToString(operation->type)
-                      << " ...";
-    if (operation->type == NNADAPTER_MAT_MUL) {
-      auto& input_operands = operation->input_operands;
-      auto& output_operands = operation->output_operands;
-      NNADAPTER_CHECK_EQ(input_operands.size(), 4);
-      NNADAPTER_CHECK_EQ(output_operands.size(), 1);
-      auto x_operand = input_operands[0];
-      auto y_operand = input_operands[1];
-      if (IsConstantOperand(x_operand) || !IsConstantOperand(y_operand)) {
-        NNADAPTER_VLOG(5) << "Only support x is tensor and y is persistable";
-        continue;
-      }
-      if (x_operand->type.dimensions.count != 2 ||
-          y_operand->type.dimensions.count != 2) {
-        NNADAPTER_VLOG(5)
-            << "Only support x's dims count and y's dims count is 2.";
-        continue;
-      }
-      auto transpose_x_operand = input_operands[2];
-      auto transpose_y_operand = input_operands[3];
-      auto mat_mul_out_operand = output_operands[0];
-      auto mat_mul_consumers = GetOperandConsumers(model, mat_mul_out_operand);
-      if (mat_mul_consumers.size() == 0) {
-        continue;
-      }
-      bool can_fuse = true;
-      std::map<core::Operation*, std::vector<core::Operand*>> operation_map;
-      // Process multiple add operation
-      for (auto add_operation : mat_mul_consumers) {
-        if (add_operation->type != NNADAPTER_ADD) {
-          can_fuse = false;
-          break;
-        }
-        auto& add_input_operands = add_operation->input_operands;
-        auto& add_output_operands = add_operation->output_operands;
-        NNADAPTER_CHECK_EQ(add_input_operands.size(), 3);
-        NNADAPTER_CHECK_EQ(add_output_operands.size(), 1);
-        auto bias_operand = add_input_operands[1];
-        if (!IsConstantOperand(bias_operand)) {
-          can_fuse = false;
-          break;
-        }
-        auto fuse_code_operand = add_input_operands[2];
-        if (*reinterpret_cast<bool*>(transpose_x_operand->buffer)) {
-          auto x_shape_count = x_operand->type.dimensions.count;
-          if (x_shape_count < 2) {
-            can_fuse = false;
-            break;
-          }
-          std::vector<int32_t> permutation;
-          for (int32_t i = 0; i < x_shape_count - 2; i++) {
-            permutation.push_back(i);
-          }
-          permutation.push_back(x_shape_count - 1);
-          permutation.push_back(x_shape_count - 2);
-          TransposeOperand(x_operand, permutation);
-        }
-        // If the transpose_y operand is false, transform the dimension to adapt
-        // fc
-        if (!*reinterpret_cast<bool*>(transpose_y_operand->buffer)) {
-          if (y_operand->type.dimensions.count != 2) {
-            can_fuse = false;
-            break;
-          }
-          TransposeOperand(y_operand, std::vector<int32_t>({1, 0}));
-        }
-        // Add FC operation into map
-        operation_map[add_operation] = {
-            x_operand, y_operand, bias_operand, fuse_code_operand};
-      }
-      if (!can_fuse) {
-        continue;
-      }
-      for (auto it = operation_map.begin(); it != operation_map.end(); ++it) {
-        auto fc_operation = AddOperation(model);
-        fc_operation->type = NNADAPTER_FULLY_CONNECTED;
-        fc_operation->input_operands = it->second;
-        fc_operation->output_operands = it->first->output_operands;
-        RemoveOperation(model, it->first);
-      }
-      // Clean
-      RemoveOperand(model, transpose_x_operand);
-      RemoveOperand(model, transpose_y_operand);
-      RemoveOperand(model, mat_mul_out_operand);
-      RemoveOperation(model, operation);
-    }
+class MatMulAddFuser : public PatternMatcher {
+ public:
+  explicit MatMulAddFuser(bool restrict_2d_input)
+      : restrict_2d_input_(restrict_2d_input) {}
+  void BuildPattern() override;
+  bool HandleMatchedResults(core::Model* model,
+                            const std::map<std::string, Node*>& nodes) override;
+
+ private:
+  bool restrict_2d_input_{false};
+};
+
+void MatMulAddFuser::BuildPattern() {
+  // Operation patterns
+  auto matmul_pattern =
+      CreatePattern("matmul", NNADAPTER_MAT_MUL)
+          ->MatchCondition([this](const Node* node) -> bool {
+            auto operation = node->operation;
+            if (restrict_2d_input_) {
+              return operation && operation->input_operands.size() == 4 &&
+                     operation->input_operands[0]->type.dimensions.count == 2 &&
+                     operation->input_operands[1]->type.dimensions.count == 2;
+            } else {
+              return operation && operation->input_operands.size() == 4 &&
+                     operation->input_operands[0]->type.dimensions.count >= 2 &&
+                     operation->input_operands[1]->type.dimensions.count == 2;
+            }
+          })
+          ->IsIntermediate();
+  auto add_pattern = CreatePattern("add", NNADAPTER_ADD)->IsIntermediate();
+  // Operand patterns
+  auto matmul_x_pattern = CreatePattern("matmul_x")
+                              ->IsOperationInputOperand(NNADAPTER_MAT_MUL, 0)
+                              ->IsVariableOperand();
+  auto matmul_y_pattern = CreatePattern("matmul_y")
+                              ->IsOperationInputOperand(NNADAPTER_MAT_MUL, 1)
+                              ->IsConstantOperand();
+  auto matmul_transpose_x_pattern =
+      CreatePattern("matmul_transpose_x")
+          ->IsOperationInputOperand(NNADAPTER_MAT_MUL, 2)
+          ->IsConstantOperand()
+          ->MatchCondition([](const Node* node) -> bool {
+            auto operand = node->operand;
+            return operand && operand->buffer &&
+                   !*reinterpret_cast<bool*>(operand->buffer);
+          })
+          ->IsIntermediate();
+  auto matmul_transpose_y_pattern =
+      CreatePattern("matmul_transpose_y")
+          ->IsOperationInputOperand(NNADAPTER_MAT_MUL, 3)
+          ->IsConstantOperand()
+          ->IsIntermediate();
+  auto matmul_output_pattern = CreatePattern("matmul_output")->IsIntermediate();
+  auto add_input_pattern = CreatePattern("add_input")
+                               ->IsOperationInputOperand(NNADAPTER_ADD, 1)
+                               ->IsConstantOperand()
+                               ->IsIntermediate();
+  auto add_fuse_code_pattern = CreatePattern("add_fuse_code")
+                                   ->IsOperationInputOperand(NNADAPTER_ADD, 2)
+                                   ->IsConstantOperand();
+  auto add_output_pattern = CreatePattern("add_output");
+  // Create the topological connections for the above patterns
+  std::vector<Pattern*> matmul_input_patterns{matmul_x_pattern,
+                                              matmul_y_pattern,
+                                              matmul_transpose_x_pattern,
+                                              matmul_transpose_y_pattern};
+  std::vector<Pattern*> add_input_patterns{
+      matmul_output_pattern, add_input_pattern, add_fuse_code_pattern};
+  matmul_input_patterns >> *matmul_pattern >> *matmul_output_pattern;
+  add_input_patterns >> *add_pattern >> *add_output_pattern;
+}
+
+bool MatMulAddFuser::HandleMatchedResults(
+    core::Model* model, const std::map<std::string, Node*>& nodes) {
+  // Get the operands and operations from the matched subgraph nodes.
+  auto matmul_operation = nodes.at("matmul")->operation;
+  auto matmul_x_operand = matmul_operation->input_operands[0];
+  auto matmul_y_operand = matmul_operation->input_operands[1];
+  auto matmul_transpose_y_operand = matmul_operation->input_operands[3];
+  auto matmul_output_operand = matmul_operation->output_operands[0];
+  auto add_operation = nodes.at("add")->operation;
+  auto add_input_operand = add_operation->input_operands[1];
+  auto add_fuse_code_operand = add_operation->input_operands[2];
+  auto add_output_operand = add_operation->output_operands[0];
+  auto matmul_transpose_y =
+      *reinterpret_cast<bool*>(matmul_transpose_y_operand->buffer);
+  auto matmul_num_units =
+      matmul_y_operand->type.dimensions.data[matmul_transpose_y ? 0 : 1];
+  if (ProductionOfDimensions(add_input_operand->type.dimensions.data,
+                             add_input_operand->type.dimensions.count) !=
+      matmul_num_units)
+    return false;
+  // [batch_size, input_size] * [input_size, num_units] -> [batch_size,
+  // input_size] * [num_units, input_size]
+  if (!matmul_transpose_y) {
+    TransposeOperand(matmul_y_operand, std::vector<int32_t>({1, 0}));
   }
+  // Requantize the input operand of NNADAPTER_ADD as the bias operand of
+  // NNADAPTER_FULLY_CONNECTED
+  std::vector<float> dequantized_add_input(matmul_num_units);
+  if (IsInt8SymmPerLayerQuantType(add_input_operand->type.precision)) {
+    NNADAPTER_CHECK(DequantizeData<int8_t>(
+        reinterpret_cast<int8_t*>(add_input_operand->buffer),
+        &matmul_num_units,
+        1,
+        &add_input_operand->type.symm_per_layer_params.scale,
+        NULL,
+        -1,
+        -128,
+        127,
+        dequantized_add_input.data()));
+  } else if (IsInt32SymmPerLayerQuantType(add_input_operand->type.precision)) {
+    NNADAPTER_CHECK(DequantizeData<int32_t>(
+        reinterpret_cast<int32_t*>(add_input_operand->buffer),
+        &matmul_num_units,
+        1,
+        &add_input_operand->type.symm_per_layer_params.scale,
+        NULL,
+        -1,
+        -2147483647,
+        2147483647,
+        dequantized_add_input.data()));
+  } else {
+    NNADAPTER_CHECK_EQ(add_input_operand->type.precision, NNADAPTER_FLOAT32);
+    memcpy(dequantized_add_input.data(),
+           reinterpret_cast<float*>(add_input_operand->buffer),
+           add_input_operand->length);
+  }
+  core::Operand* fully_connected_bias_operand;
+  // Quantize the bias operand for NNADAPTER_FULLY_CONNECTED
+  if (IsInt8SymmPerLayerQuantType(matmul_x_operand->type.precision) &&
+      IsInt8SymmPerLayerQuantType(matmul_y_operand->type.precision) &&
+      IsInt8SymmPerLayerQuantType(matmul_output_operand->type.precision)) {
+    float fully_connected_bias_scale =
+        matmul_x_operand->type.symm_per_layer_params.scale *
+        matmul_y_operand->type.symm_per_layer_params.scale;
+    std::vector<int32_t> fully_connected_bias(matmul_num_units);
+    NNADAPTER_CHECK(QuantizeData<int32_t>(dequantized_add_input.data(),
+                                          &matmul_num_units,
+                                          1,
+                                          &fully_connected_bias_scale,
+                                          NULL,
+                                          -1,
+                                          -2147483647,
+                                          2147483647,
+                                          fully_connected_bias.data()));
+    fully_connected_bias_operand =
+        AddQuant32ConstantOperand(model,
+                                  fully_connected_bias.data(),
+                                  {matmul_num_units},
+                                  fully_connected_bias_scale);
+  } else if (IsInt8SymmPerLayerQuantType(matmul_x_operand->type.precision) &&
+             IsInt8SymmPerChannelQuantType(matmul_y_operand->type.precision) &&
+             IsInt8SymmPerLayerQuantType(
+                 matmul_output_operand->type.precision)) {
+    std::vector<float> fully_connected_bias_scale;
+    for (uint32_t i = 0; i < matmul_num_units; i++) {
+      fully_connected_bias_scale.push_back(
+          matmul_x_operand->type.symm_per_layer_params.scale *
+          matmul_y_operand->type.symm_per_channel_params.scales[i]);
+    }
+    std::vector<int32_t> fully_connected_bias(matmul_num_units);
+    NNADAPTER_CHECK(QuantizeData<int32_t>(dequantized_add_input.data(),
+                                          &matmul_num_units,
+                                          1,
+                                          fully_connected_bias_scale.data(),
+                                          NULL,
+                                          -1,
+                                          -2147483647,
+                                          2147483647,
+                                          fully_connected_bias.data()));
+    fully_connected_bias_operand =
+        AddQuant32ConstantOperand(model,
+                                  fully_connected_bias.data(),
+                                  {matmul_num_units},
+                                  fully_connected_bias_scale.data(),
+                                  matmul_num_units,
+                                  0);
+  } else {
+    NNADAPTER_CHECK_EQ(matmul_x_operand->type.precision, NNADAPTER_FLOAT32);
+    NNADAPTER_CHECK_EQ(matmul_y_operand->type.precision, NNADAPTER_FLOAT32);
+    NNADAPTER_CHECK_EQ(matmul_output_operand->type.precision,
+                       NNADAPTER_FLOAT32);
+    fully_connected_bias_operand =
+        AddFloat32ConstantOperand(model, dequantized_add_input);
+  }
+  // Create a new NNADAPTER_FULLY_CONNECTED operation and replace the matched
+  // subgraph nodes.
+  auto* fully_connected_operation = AddOperation(model);
+  fully_connected_operation->type = NNADAPTER_FULLY_CONNECTED;
+  fully_connected_operation->input_operands = {matmul_x_operand,
+                                               matmul_y_operand,
+                                               fully_connected_bias_operand,
+                                               add_fuse_code_operand};
+  fully_connected_operation->output_operands = {add_output_operand};
+  // The matched intermediate operands and operations will be deleted only when
+  // it returns true.
+  return true;
+}
+
+NNADAPTER_EXPORT void FuseMatMulAddIntoFullyConnected(core::Model* model,
+                                                      bool restrict_2d_input) {
+  NNADAPTER_VLOG(5) << "Apply MatMulAddFuser";
+  bool stop;
+  do {
+    MatMulAddFuser mat_mul_add_fuser(restrict_2d_input);
+    stop = mat_mul_add_fuser.Apply(model) == 0;
+  } while (!stop);
 }
 
 }  // namespace nnadapter

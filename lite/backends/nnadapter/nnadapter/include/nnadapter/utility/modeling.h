@@ -31,6 +31,9 @@ core::Operation* AddOperation(core::Model* model);
 void RemoveOperand(core::Model* model, core::Operand* operand);
 // Remove a operation into a model
 void RemoveOperation(core::Model* model, core::Operation* operation);
+// Allocate memory based on the data type and dimensions for a operand, and do
+// not reallocate if memory is sufficient
+void* AllocateOperand(core::Operand* operand);
 // Add a bool8 scalar constant operand
 core::Operand* AddBool8ConstantOperand(core::Model* model, bool value);
 // Add a int32 scalar constant operand
@@ -146,6 +149,10 @@ bool UpdateModelOutputOperands(core::Model* model,
                                core::Operand* new_operand);
 // Check if it is a constant operand
 bool IsConstantOperand(core::Operand* operand);
+bool IsConstantCopyOperand(core::Operand* operand);
+bool IsConstantReferenceOperand(core::Operand* operand);
+// Check if it is a temporary variable operand
+bool IsTemporaryVariableOperand(core::Operand* operand);
 // Check if it is a temporary shape operand
 bool IsTemporaryShapeOperand(core::Operand* operand);
 bool IsModelInputOperand(core::Operand* operand);
@@ -179,10 +186,14 @@ core::Operand* InsertReshapeOperation(
     const NNAdapterOperandDimensionType& input_dimensions,
     std::vector<int32_t> shape = {});
 // Append or insert a dummy add operation, set the addend to a zero operand
-core::Operand* AppendDummyOperation(core::Model* model,
-                                    core::Operand* input_operand);
-core::Operand* InsertDummyOperation(core::Model* model,
-                                    core::Operand* output_operand);
+core::Operand* AppendDummyAddOperation(core::Model* model,
+                                       core::Operand* input_operand);
+core::Operand* InsertDummyAddOperation(core::Model* model,
+                                       core::Operand* output_operand);
+core::Operand* AppendDummySubOperation(core::Model* model,
+                                       core::Operand* input_operand);
+core::Operand* InsertDummySubOperation(core::Model* model,
+                                       core::Operand* output_operand);
 // Append or insert a unary activiation or other operation which has only one
 // input and output operand
 core::Operand* AppendUnaryOperation(core::Model* model,
@@ -199,6 +210,13 @@ core::Operand* AppendRequantOperation(core::Model* model,
 core::Operand* InsertRequantOperation(core::Model* model,
                                       core::Operand* output_operand,
                                       void* input_quant_params);
+// Append or insert a softmax operation
+core::Operand* AppendSoftmaxOperation(core::Model* model,
+                                      core::Operand* input_operand,
+                                      int32_t axis);
+core::Operand* InsertSoftmaxOperation(core::Model* model,
+                                      core::Operand* output_operand,
+                                      int32_t axis);
 
 // Sort the operations of the specified model in topological order
 std::vector<const core::Operation*> SortOperationsInTopologicalOrder(

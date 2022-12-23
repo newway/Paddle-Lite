@@ -54,7 +54,9 @@ class TestElementwisePowOp(AutoScanTest):
         ]
         self.enable_testing_on_place(places=opencl_valid_places)
         self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
-        self.enable_devices_on_nnadapter(device_names=["nvidia_tensorrt"])
+        self.enable_devices_on_nnadapter(device_names=[
+            "nvidia_tensorrt", "intel_openvino", "kunlunxin_xtcl"
+        ])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -148,6 +150,22 @@ class TestElementwisePowOp(AutoScanTest):
             teller1, IgnoreReasons.ACCURACY_ERROR,
             "The elementwise_pow op's result is different from paddle, because paddle has bug on this op, wait paddle fix!"
         )
+
+        def _teller2(program_config, predictor_config):
+            if "nvidia_tensorrt" in self.get_nnadapter_device_name():
+                x_shape = program_config.inputs["input_data_x"].shape
+                y_shape = program_config.inputs["input_data_y"].shape
+                axis = program_config.ops[0].attrs["axis"]
+                if len(x_shape) == 1 \
+                    or len(x_shape) != len(y_shape) \
+                    or x_shape[0] != y_shape[0] \
+                    or axis == 0:
+                    return True
+
+        self.add_ignore_check_case(
+            _teller2, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
+            "Lite does not support 'x_shape_size == 1' or 'x_shape_size != y_shape_size' "
+            "or 'x_shape[0] != y_shape[0]' or 'axis == 0' on NvidiaTensorrt.")
 
     def test(self, *args, **kwargs):
         self.run_and_statis(quant=False, max_examples=300)

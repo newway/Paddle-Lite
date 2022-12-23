@@ -30,7 +30,8 @@ CLRuntime* CLRuntime::Global() {
 }
 
 void CLRuntime::Flush(const int index) {
-  if (is_cl_runtime_initialized_ && index % opencl_flush_period_ == 0) {
+  if (is_cl_runtime_initialized_ && index % opencl_flush_period_ == 0 &&
+      command_queue_ != nullptr) {
     command_queue_->flush();
   }
 }
@@ -341,7 +342,7 @@ std::unique_ptr<cl::Program> CLRuntime::CreateProgramFromSource(
   VLOG(4) << "Program source size: " << content.size();
 #endif
   CL_CHECK_FATAL_SOLID(status_);
-  return std::move(prog);
+  return prog;
 }
 
 bool CLRuntime::BuildProgram(cl::Program* program, const std::string& options) {
@@ -518,7 +519,7 @@ std::unique_ptr<cl::UserEvent> CLRuntime::CreateEvent(
   auto event =
       std::unique_ptr<cl::UserEvent>(new cl::UserEvent(context, &status_));
   CL_CHECK_FATAL_SOLID(status_);
-  return std::move(event);
+  return event;
 }
 
 bool CLRuntime::InitializePlatform() {

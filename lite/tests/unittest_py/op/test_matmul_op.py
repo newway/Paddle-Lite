@@ -67,7 +67,9 @@ class TestMulOp(AutoScanTest):
         ]
         self.enable_testing_on_place(places=opencl_places)
         self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
-        self.enable_devices_on_nnadapter(device_names=["nvidia_tensorrt"])
+        self.enable_devices_on_nnadapter(device_names=[
+            "nvidia_tensorrt", "intel_openvino", "kunlunxin_xtcl"
+        ])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -76,6 +78,7 @@ class TestMulOp(AutoScanTest):
 
     def sample_program_configs(self, draw):
         target_str = self.get_target()
+        persistable = draw(st.booleans())
         if target_str == "OpenCL":
             shape0 = draw(st.integers(min_value=1, max_value=4)) * 4
             shape1 = draw(st.integers(min_value=1, max_value=4)) * 4
@@ -88,38 +91,102 @@ class TestMulOp(AutoScanTest):
             shape2 = draw(st.integers(min_value=1, max_value=64))
             channels = draw(st.integers(min_value=1, max_value=64))
             batch = draw(st.integers(min_value=1, max_value=4))
+            assume(persistable == True)
         assume(shape0 != shape1)
         transpose_X = draw(st.booleans())
         transpose_Y = draw(st.booleans())
         len_X = draw(st.integers(min_value=1, max_value=4))
         len_Y = draw(st.integers(min_value=1, max_value=4))
 
-        assume((len_X == 1 and len_Y == 1) or (len_X == 2 and len_Y == 2) or
-               (len_X == 4 and len_Y == 4) or (len_X == 4 and len_Y == 2) or
-               (len_X == 4 and len_Y == 1) or (len_X == 3 and len_Y == 3) or
-               (len_X == 3 and len_Y == 2) or (len_X == 3 and len_Y == 1))
+        if persistable:
+            assume(
+                (len_X == 1 and len_Y == 1) or (len_X == 2 and len_Y == 2) or
+                (len_X == 4 and len_Y == 4) or (len_X == 4 and len_Y == 2) or
+                (len_X == 4 and len_Y == 1) or (len_X == 3 and len_Y == 3) or
+                (len_X == 3 and len_Y == 2) or (len_X == 3 and len_Y == 1))
 
-        if (len_X == 1 and len_Y == 1):
-            assume(transpose_X == transpose_Y)
-            X_shape = [shape0]
-            if ((not transpose_X) and (not transpose_Y)):
-                Y_shape = [shape0]
-            if ((transpose_X) and (transpose_Y)):
+            if (len_X == 1 and len_Y == 1):
+                assume(transpose_X == transpose_Y)
+                X_shape = [shape0]
+                if ((not transpose_X) and (not transpose_Y)):
+                    Y_shape = [shape0]
+                if ((transpose_X) and (transpose_Y)):
+                    Y_shape = [shape1]
+            if (len_X == 2 and len_Y == 2):
+                if ((not transpose_X) and (not transpose_Y)):
+                    X_shape = [shape0, shape1]
+                    Y_shape = [shape1, shape2]
+                if ((transpose_X) and (not transpose_Y)):
+                    X_shape = [shape1, shape0]
+                    Y_shape = [shape1, shape2]
+                if ((not transpose_X) and (transpose_Y)):
+                    X_shape = [shape0, shape1]
+                    Y_shape = [shape2, shape1]
+                if ((transpose_X) and (transpose_Y)):
+                    X_shape = [shape1, shape0]
+                    Y_shape = [shape2, shape1]
+            if (len_X == 4 and len_Y == 4):
+                if ((not transpose_X) and (not transpose_Y)):
+                    X_shape = [batch, channels, shape0, shape1]
+                    Y_shape = [batch, channels, shape1, shape2]
+                if ((transpose_X) and (not transpose_Y)):
+                    X_shape = [batch, channels, shape1, shape0]
+                    Y_shape = [batch, channels, shape1, shape2]
+                if ((not transpose_X) and (transpose_Y)):
+                    X_shape = [batch, channels, shape0, shape1]
+                    Y_shape = [batch, channels, shape2, shape1]
+                if ((transpose_X) and (transpose_Y)):
+                    X_shape = [batch, channels, shape1, shape0]
+                    Y_shape = [batch, channels, shape2, shape1]
+            if (len_X == 4 and len_Y == 2):
+                if ((not transpose_X) and (not transpose_Y)):
+                    X_shape = [batch, channels, shape0, shape1]
+                    Y_shape = [shape1, shape2]
+                if ((transpose_X) and (not transpose_Y)):
+                    X_shape = [batch, channels, shape1, shape0]
+                    Y_shape = [shape1, shape2]
+                if ((not transpose_X) and (transpose_Y)):
+                    X_shape = [batch, channels, shape0, shape1]
+                    Y_shape = [shape2, shape1]
+                if ((transpose_X) and (transpose_Y)):
+                    X_shape = [batch, channels, shape1, shape0]
+                    Y_shape = [shape2, shape1]
+            if (len_X == 4 and len_Y == 1):
+                assume(transpose_X == transpose_Y == False)
+                X_shape = [batch, channels, shape0, shape1]
                 Y_shape = [shape1]
-        if (len_X == 2 and len_Y == 2):
-            if ((not transpose_X) and (not transpose_Y)):
-                X_shape = [shape0, shape1]
-                Y_shape = [shape1, shape2]
-            if ((transpose_X) and (not transpose_Y)):
-                X_shape = [shape1, shape0]
-                Y_shape = [shape1, shape2]
-            if ((not transpose_X) and (transpose_Y)):
-                X_shape = [shape0, shape1]
-                Y_shape = [shape2, shape1]
-            if ((transpose_X) and (transpose_Y)):
-                X_shape = [shape1, shape0]
-                Y_shape = [shape2, shape1]
-        if (len_X == 4 and len_Y == 4):
+            if (len_X == 3 and len_Y == 3):
+                if ((not transpose_X) and (not transpose_Y)):
+                    X_shape = [channels, shape0, shape1]
+                    Y_shape = [channels, shape1, shape2]
+                if ((transpose_X) and (not transpose_Y)):
+                    X_shape = [channels, shape1, shape0]
+                    Y_shape = [channels, shape1, shape2]
+                if ((not transpose_X) and (transpose_Y)):
+                    X_shape = [channels, shape0, shape1]
+                    Y_shape = [channels, shape2, shape1]
+                if ((transpose_X) and (transpose_Y)):
+                    X_shape = [channels, shape1, shape0]
+                    Y_shape = [channels, shape2, shape1]
+            if (len_X == 3 and len_Y == 2):
+                if ((not transpose_X) and (not transpose_Y)):
+                    X_shape = [channels, shape0, shape1]
+                    Y_shape = [shape1, shape2]
+                if ((transpose_X) and (not transpose_Y)):
+                    X_shape = [channels, shape1, shape0]
+                    Y_shape = [shape1, shape2]
+                if ((not transpose_X) and (transpose_Y)):
+                    X_shape = [channels, shape0, shape1]
+                    Y_shape = [shape2, shape1]
+                if ((transpose_X) and (transpose_Y)):
+                    X_shape = [channels, shape1, shape0]
+                    Y_shape = [shape2, shape1]
+            if (len_X == 3 and len_Y == 1):
+                assume(transpose_X == transpose_Y == False)
+                X_shape = [channels, shape0, shape1]
+                Y_shape = [shape1]
+        else:
+            assume((len_X == 4 and len_Y == 4))
             if ((not transpose_X) and (not transpose_Y)):
                 X_shape = [batch, channels, shape0, shape1]
                 Y_shape = [batch, channels, shape1, shape2]
@@ -132,53 +199,7 @@ class TestMulOp(AutoScanTest):
             if ((transpose_X) and (transpose_Y)):
                 X_shape = [batch, channels, shape1, shape0]
                 Y_shape = [batch, channels, shape2, shape1]
-        if (len_X == 4 and len_Y == 2):
-            if ((not transpose_X) and (not transpose_Y)):
-                X_shape = [batch, channels, shape0, shape1]
-                Y_shape = [shape1, shape2]
-            if ((transpose_X) and (not transpose_Y)):
-                X_shape = [batch, channels, shape1, shape0]
-                Y_shape = [shape1, shape2]
-            if ((not transpose_X) and (transpose_Y)):
-                X_shape = [batch, channels, shape0, shape1]
-                Y_shape = [shape2, shape1]
-            if ((transpose_X) and (transpose_Y)):
-                X_shape = [batch, channels, shape1, shape0]
-                Y_shape = [shape2, shape1]
-        if (len_X == 4 and len_Y == 1):
-            assume(transpose_X == transpose_Y == False)
-            X_shape = [batch, channels, shape0, shape1]
-            Y_shape = [shape1]
-        if (len_X == 3 and len_Y == 3):
-            if ((not transpose_X) and (not transpose_Y)):
-                X_shape = [channels, shape0, shape1]
-                Y_shape = [channels, shape1, shape2]
-            if ((transpose_X) and (not transpose_Y)):
-                X_shape = [channels, shape1, shape0]
-                Y_shape = [channels, shape1, shape2]
-            if ((not transpose_X) and (transpose_Y)):
-                X_shape = [channels, shape0, shape1]
-                Y_shape = [channels, shape2, shape1]
-            if ((transpose_X) and (transpose_Y)):
-                X_shape = [channels, shape1, shape0]
-                Y_shape = [channels, shape2, shape1]
-        if (len_X == 3 and len_Y == 2):
-            if ((not transpose_X) and (not transpose_Y)):
-                X_shape = [channels, shape0, shape1]
-                Y_shape = [shape1, shape2]
-            if ((transpose_X) and (not transpose_Y)):
-                X_shape = [channels, shape1, shape0]
-                Y_shape = [shape1, shape2]
-            if ((not transpose_X) and (transpose_Y)):
-                X_shape = [channels, shape0, shape1]
-                Y_shape = [shape2, shape1]
-            if ((transpose_X) and (transpose_Y)):
-                X_shape = [channels, shape1, shape0]
-                Y_shape = [shape2, shape1]
-        if (len_X == 3 and len_Y == 1):
-            assume(transpose_X == transpose_Y == False)
-            X_shape = [channels, shape0, shape1]
-            Y_shape = [shape1]
+
         alpha = draw(st.sampled_from([0.1, 1.0, 1.1, -1.5]))
         fused_reshape_X = draw(st.sampled_from([[]]))
         fused_reshape_Y = draw(st.sampled_from([[]]))
@@ -214,32 +235,62 @@ class TestMulOp(AutoScanTest):
                 "head_number": head_number,
                 "force_fp32_output": force_fp32_output
             })
-        program_config = ProgramConfig(
-            ops=[matmul_op],
-            weights={},
-            inputs={
-                "input_data_x": TensorConfig(shape=X_shape),
-                "input_data_y": TensorConfig(shape=Y_shape)
-            },
-            outputs=["output_data"])
+        if persistable:
+            if target_str == "OpenCL":
+                program_config = ProgramConfig(
+                    ops=[matmul_op],
+                    weights={"input_data_y": TensorConfig(shape=Y_shape)},
+                    inputs={"input_data_x": TensorConfig(shape=X_shape), },
+                    outputs=["output_data"])
+            else:
+                program_config = ProgramConfig(
+                    ops=[matmul_op],
+                    weights={},
+                    inputs={
+                        "input_data_x": TensorConfig(shape=X_shape),
+                        "input_data_y": TensorConfig(shape=Y_shape)
+                    },
+                    outputs=["output_data"])
+        else:
+            program_config = ProgramConfig(
+                ops=[matmul_op],
+                weights={},
+                inputs={
+                    "input_data_x": TensorConfig(shape=X_shape),
+                    "input_data_y": TensorConfig(shape=Y_shape)
+                },
+                outputs=["output_data"])
         return program_config
 
     def sample_predictor_configs(self):
-        return self.get_predictor_configs(), ["matmul"], (1e-5, 1e-5)
+        atol, rtol = 1e-5, 1e-5
+        if self.get_nnadapter_device_name() == "kunlunxin_xtcl":
+            atol, rtol = 1e-2, 1e-2
+        return self.get_predictor_configs(), ["matmul"], (atol, rtol)
 
     def add_ignore_pass_case(self):
-        def _teller1(program_config, predictor_config):
-            x_shape = list(program_config.inputs["input_data_x"].shape)
-            y_shape = list(program_config.inputs["input_data_y"].shape)
-            nnadapter_device_name = self.get_nnadapter_device_name()
-            if nnadapter_device_name == "nvidia_tensorrt":
-                if (len(x_shape) == 1 and
-                        len(y_shape) == 1) or len(x_shape) != len(y_shape):
+        def teller1(program_config, predictor_config):
+            if self.get_nnadapter_device_name() == "nvidia_tensorrt":
+                x_shape = program_config.inputs["input_data_x"].shape
+                y_shape = program_config.inputs["input_data_y"].shape
+                if len(x_shape) < 3 or len(x_shape) != len(y_shape):
                     return True
 
         self.add_ignore_check_case(
-            _teller1, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
-            " inputs with the same operation must have same number of dimensions."
+            teller1, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
+            "Lite does not support 'x_shape_size != y_shape_size' or 'x_shape_size < 3' on nvidia_tensorrt."
+        )
+
+        def teller2(program_config, predictor_config):
+            if self.get_nnadapter_device_name() == "kunlunxin_xtcl":
+                x_shape = program_config.inputs["input_data_x"].shape
+                y_shape = program_config.inputs["input_data_y"].shape
+                if len(x_shape) == 1 or len(y_shape) == 1:
+                    return True
+
+        self.add_ignore_check_case(
+            teller2, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
+            "Lite does not support 'len(x_shape) == 1 or len(y_shape) == 1' on kunlunxin_xtcl."
         )
 
     def test(self, *args, **kwargs):
